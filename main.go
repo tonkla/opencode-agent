@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -83,10 +84,21 @@ func ensureWorkspaceDir(dir string) error {
 	return nil
 }
 
+// resolveWorkspaceDir returns dir as an absolute path. The serve API
+// rejects a relative session location with a 500, so resolve before the
+// directory reaches any session-create payload or query param.
+func resolveWorkspaceDir(dir string) (string, error) {
+	return filepath.Abs(dir)
+}
+
 func run(ctx context.Context) error {
 	configPath := flag.String("config", "config.toml", "path to config.toml")
 	flag.Parse()
 	cfg, err := LoadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	cfg.WorkspaceDir, err = resolveWorkspaceDir(cfg.WorkspaceDir)
 	if err != nil {
 		return err
 	}

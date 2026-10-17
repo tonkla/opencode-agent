@@ -61,6 +61,20 @@ func TestCreateBodyPinsWorkspace(t *testing.T) {
 	}
 }
 
+func TestResolveWorkspaceDir(t *testing.T) {
+	got, err := resolveWorkspaceDir(filepath.Join("agent-workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("relative dir must resolve absolute, got %q", got)
+	}
+	abs := filepath.Join(t.TempDir(), "ws")
+	if got, err := resolveWorkspaceDir(abs); err != nil || got != abs {
+		t.Errorf("absolute dir must pass through, got %q err %v", got, err)
+	}
+}
+
 func TestEnsureWorkspaceDir(t *testing.T) {
 	if err := ensureWorkspaceDir(filepath.Join(t.TempDir(), "nested", "ws")); err != nil {
 		t.Errorf("missing dir: %v", err)
