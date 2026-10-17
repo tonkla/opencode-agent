@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -45,5 +47,42 @@ func TestSplitMessage(t *testing.T) {
 	got := splitMessage(emoji)
 	if len(got) != 2 || len([]rune(strings.Join(got, ""))) != maxReplyRunes+1 {
 		t.Error("multibyte split broke runes")
+	}
+}
+
+func TestCreateBodyPinsWorkspace(t *testing.T) {
+	a := NewAgent(AgentOptions{Directory: "/tmp/ws"})
+	loc, ok := a.createBody()["location"].(map[string]any)
+	if !ok {
+		t.Fatal("create body missing location; session lands in server dir")
+	}
+	if loc["directory"] != "/tmp/ws" {
+		t.Errorf("location.directory = %v, want /tmp/ws", loc["directory"])
+	}
+}
+
+func TestEnsureWorkspaceDir(t *testing.T) {
+	if err := ensureWorkspaceDir(filepath.Join(t.TempDir(), "nested", "ws")); err != nil {
+		t.Errorf("missing dir: %v", err)
+	}
+	if err := ensureWorkspaceDir(t.TempDir()); err != nil {
+		t.Errorf("writable dir: %v", err)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWorkspaceDir(file); err == nil {
+		t.Error("file path must fail")
+	}
+	readonly := t.TempDir()
+	if err := os.Chmod(readonly, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(readonly, 0o755)
+	if err := ensureWorkspaceDir(readonly); err == nil {
+		t.Error("read-only dir must fail")
+	} else if !strings.Contains(err.Error(), "not writable") {
+		t.Errorf("error %q must name the permission problem", err)
 	}
 }

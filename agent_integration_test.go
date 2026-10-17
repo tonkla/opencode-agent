@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +40,61 @@ func TestAgentLiveServe(t *testing.T) {
 	if err := a.Reset(ctx); err != nil {
 		t.Fatalf("second reset: %v", err)
 	}
+}
+
+// TestAgentLiveSessionLocation proves Reset pins the session to the
+// workspace dir. Sessions created without a location land in the server's
+// own directory, so the agent would not recognize its workspace.
+func TestAgentLiveSessionLocation(t *testing.T) {
+	baseURL := os.Getenv("OPENCODE_TEST_BASE_URL")
+	if baseURL == "" {
+		t.Skip("no live server; set OPENCODE_TEST_BASE_URL")
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	a := NewAgent(AgentOptions{
+		BaseURL:   baseURL,
+		Username:  "opencode",
+		Password:  os.Getenv("OPENCODE_TEST_PASSWORD"),
+		Directory: dir,
+		Timeout:   2 * time.Minute,
+	})
+	if err := a.Reset(ctx); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	status, raw, err := a.call(ctx, http.MethodGet, "/session", nil)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("list: status %d err %v", status, err)
+	}
+	var out envelope[[]struct {
+		Title    string `json:"title"`
+		Location *struct {
+			Directory string `json:"directory"`
+		} `json:"location"`
+	}]
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range out.Data {
+		if s.Title != "telegram" {
+			continue
+		}
+		if s.Location == nil {
+			t.Fatal("telegram session has no location; it runs in the server dir")
+		}
+		got, err := filepath.EvalSymlinks(s.Location.Directory)
+		if err != nil {
+			got = s.Location.Directory
+		}
+		if got != dir {
+			t.Fatalf("session directory = %q, want %q", s.Location.Directory, dir)
+		}
+		return
+	}
+	t.Fatal("telegram session not listed under the workspace dir")
 }
 
 // TestAgentLiveModel exercises the /model paths against a real serve using

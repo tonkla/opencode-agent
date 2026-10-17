@@ -64,6 +64,25 @@ func (a *app) answer(ctx context.Context, b *bot.Bot, update *models.Update) {
 	a.sendReply(ctx, b, chatID, reply)
 }
 
+// ensureWorkspaceDir creates dir and verifies the agent can write to it.
+// MkdirAll alone succeeds on an existing read-only dir, so probe with a
+// temp file to fail fast instead of mid-session.
+func ensureWorkspaceDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	probe, err := os.CreateTemp(dir, ".write-test-*")
+	if err != nil {
+		return fmt.Errorf("agent_workspace_dir %q is not writable: %w", dir, err)
+	}
+	name := probe.Name()
+	probe.Close()
+	if err := os.Remove(name); err != nil {
+		return fmt.Errorf("agent_workspace_dir %q probe cleanup failed: %w", dir, err)
+	}
+	return nil
+}
+
 func run(ctx context.Context) error {
 	configPath := flag.String("config", "config.toml", "path to config.toml")
 	flag.Parse()
@@ -71,7 +90,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(cfg.WorkspaceDir, 0o755); err != nil {
+	if err := ensureWorkspaceDir(cfg.WorkspaceDir); err != nil {
 		return err
 	}
 

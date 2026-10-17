@@ -166,11 +166,23 @@ func (a *Agent) call(ctx context.Context, method, path string, body any) (int, [
 	return res.StatusCode, raw, nil
 }
 
-func (a *Agent) create(ctx context.Context) (string, error) {
-	body := map[string]any{"title": "telegram"}
+// createBody builds the session-create payload. The location pins the
+// session's working directory to the workspace. The ?directory= query param
+// alone does not do this: it only scopes listings, so without location every
+// session lands in the server's own directory.
+func (a *Agent) createBody() map[string]any {
+	body := map[string]any{
+		"title":    "telegram",
+		"location": map[string]any{"directory": a.directory},
+	}
 	if a.defaultModel != nil {
 		body["model"] = a.defaultModel.payload()
 	}
+	return body
+}
+
+func (a *Agent) create(ctx context.Context) (string, error) {
+	body := a.createBody()
 	status, raw, err := a.call(ctx, http.MethodPost, "/session", body)
 	if err != nil {
 		return "", err
