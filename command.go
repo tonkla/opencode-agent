@@ -18,6 +18,8 @@ func (a *app) registerCommands(b *bot.Bot) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "ping", bot.MatchTypeCommand, a.requireUser(a.ping))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "new", bot.MatchTypeCommand, a.requireUser(a.fresh))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "model", bot.MatchTypeCommand, a.requireUser(a.model))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "remember", bot.MatchTypeCommand, a.requireUser(a.remember))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "forget", bot.MatchTypeCommand, a.requireUser(a.forget))
 }
 
 func (a *app) model(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -101,7 +103,43 @@ func (a *app) ping(ctx context.Context, b *bot.Bot, update *models.Update) {
 }
 
 // startMessage is the short welcome reply for /start.
-const startMessage = "Welcome! Send me anything to chat. /new starts a fresh session, /model shows the model."
+const startMessage = "Welcome! Send me anything to chat. /new starts a fresh session, /model shows the model, /remember saves a fact."
+
+// memoryTarget splits the optional "user:" prefix off a /remember or
+// /forget argument. Bare text targets MEMORY.md; "user:" targets USER.md.
+func memoryTarget(arg string) (file, rest string) {
+	if r, ok := strings.CutPrefix(arg, "user:"); ok {
+		return userFile, strings.TrimSpace(r)
+	}
+	return memoryFile, arg
+}
+
+func (a *app) remember(ctx context.Context, b *bot.Bot, update *models.Update) {
+	chatID := update.Message.Chat.ID
+	arg := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/remember"))
+	file, rest := memoryTarget(arg)
+	if err := Remember(a.agent.directory, file, rest); err != nil {
+		a.sendReply(ctx, b, chatID, "Could not remember that: "+err.Error())
+		return
+	}
+	a.sendReply(ctx, b, chatID, "Remembered in "+file+".")
+}
+
+func (a *app) forget(ctx context.Context, b *bot.Bot, update *models.Update) {
+	chatID := update.Message.Chat.ID
+	arg := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/forget"))
+	file, rest := memoryTarget(arg)
+	removed, err := Forget(a.agent.directory, file, rest)
+	if err != nil {
+		a.sendReply(ctx, b, chatID, "Could not forget that: "+err.Error())
+		return
+	}
+	if removed == 0 {
+		a.sendReply(ctx, b, chatID, "No lines in "+file+" matched.")
+		return
+	}
+	a.sendReply(ctx, b, chatID, "Forgot the matching lines in "+file+".")
+}
 
 func (a *app) start(ctx context.Context, b *bot.Bot, update *models.Update) {
 	a.sendReply(ctx, b, update.Message.Chat.ID, startMessage)

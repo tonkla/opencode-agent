@@ -280,15 +280,25 @@ func (a *Agent) Ask(ctx context.Context, question string) (string, error) {
 	a.mu <- struct{}{}
 	defer func() { <-a.mu }()
 
+	fresh := false
 	if a.sessionID == "" || !a.alive(ctx, a.sessionID) {
 		id, err := a.create(ctx)
 		if err != nil {
 			return "", err
 		}
 		a.sessionID = id
+		fresh = true
+	}
+	// A fresh session gets the memory snapshot ahead of the question. This
+	// is the bootstrap injection: curated facts enter context once, and
+	// withSnapshot passes text through untouched when no memory files
+	// exist, so sessions without memory behave exactly as before.
+	text := question
+	if fresh {
+		text = withSnapshot(a.directory, question)
 	}
 	since := time.Now().UnixMilli()
-	status, err := a.prompt(ctx, a.sessionID, question)
+	status, err := a.prompt(ctx, a.sessionID, text)
 	if err != nil {
 		return "", err
 	}
@@ -298,7 +308,7 @@ func (a *Agent) Ask(ctx context.Context, question string) (string, error) {
 			return "", err
 		}
 		a.sessionID = id
-		if status, err := a.prompt(ctx, a.sessionID, question); err != nil || status != http.StatusOK {
+		if status, err := a.prompt(ctx, a.sessionID, withSnapshot(a.directory, question)); err != nil || status != http.StatusOK {
 			return "", fmt.Errorf("prompt failed with %d", status)
 		}
 	} else if status != http.StatusOK {
@@ -315,6 +325,9 @@ func (a *Agent) Reset(ctx context.Context) error {
 	if a.sessionID != "" {
 		a.destroy(ctx, a.sessionID)
 	}
+	// Best effort: mark the boundary in the daily note. A note failure
+	// must never fail the reset itself.
+	_ = AppendNote(a.directory, "session reset")
 	id, err := a.create(ctx)
 	if err != nil {
 		return err
