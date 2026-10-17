@@ -1,0 +1,11 @@
+# Copy to config.toml and fill in the values. Only the first four keys are
+# required. The rest have defaults.
+telegram_bot_token = "123456:replace-me"
+telegram_allowed_user_id = 123456789
+opencode_password = "replace-me-with-the-serve-password"
+agent_workspace_dir = "/Users/YOU/agent-workspace"
+
+# Optional. Defaults shown.
+opencode_base_url = "http://127.0.0.1:4096"
+opencode_server_user = "opencode"
+agent_timeout_ms = 300000
