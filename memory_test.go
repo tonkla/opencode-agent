@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +87,23 @@ func TestRememberBudgetCountsRunes(t *testing.T) {
 	}
 }
 
+func TestSoulAndIdentityAreUncapped(t *testing.T) {
+	dir := t.TempDir()
+	long := strings.Repeat("v", memoryBudget*2)
+	for _, name := range []string{soulFile, identityFile} {
+		if err := Remember(dir, name, long); err != nil {
+			t.Errorf("%s must accept long entries, got %v", name, err)
+		}
+	}
+	if err := Remember(dir, "NOTES.md", "x"); err == nil {
+		t.Error("files outside the registry must fail")
+	}
+	removed, err := Forget(dir, soulFile, long[:10])
+	if err != nil || removed != 1 {
+		t.Errorf("soul forget = (%d,%v), want (1,nil)", removed, err)
+	}
+}
+
 func TestForget(t *testing.T) {
 	dir := t.TempDir()
 	for _, l := range []string{"project uses chi router", "staging ssh port 2222", "staging host is 10.0.1.50"} {
@@ -104,6 +123,54 @@ func TestForget(t *testing.T) {
 	}
 	if _, err := Forget(dir, memoryFile, "  "); err == nil {
 		t.Error("blank substring must fail")
+	}
+}
+
+func TestWorkspaceInventory(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 17, 9, 30, 0, 0, time.UTC)
+	writes := map[string]string{
+		memoryFile:   "project uses chi router",
+		userFile:     "prefers terse replies",
+		soulFile:     "direct, no sycophancy",
+		identityFile: "keeper bot",
+	}
+	for name, line := range writes {
+		if err := Remember(dir, name, line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := AppendNoteAt(dir, "migrated db to postgres", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Forget(dir, memoryFile, "chi router"); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			rel, _ := filepath.Rel(dir, path)
+			names = append(names, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(names)
+	want := []string{"IDENTITY.md", "MEMORY.md", "SOUL.md", "USER.md", filepath.Join("memory", "2026-10-17.md")}
+	if fmt.Sprint(names) != fmt.Sprint(want) {
+		t.Errorf("workspace files = %v, want %v", names, want)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, memoryFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "chi router") {
+		t.Error("forgotten line must be gone from disk")
 	}
 }
 

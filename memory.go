@@ -12,9 +12,11 @@ import (
 // directory, so sessions, notes, and curated facts share one root and no new
 // config key is needed.
 const (
-	memoryFile = "MEMORY.md"
-	userFile   = "USER.md"
-	memoryDir  = "memory"
+	memoryFile   = "MEMORY.md"
+	userFile     = "USER.md"
+	soulFile     = "SOUL.md"
+	identityFile = "IDENTITY.md"
+	memoryDir    = "memory"
 )
 
 // Curated budgets in characters, after the Hermes limits. A write that would
@@ -25,17 +27,34 @@ const (
 	userBudget   = 1375
 )
 
+// artifactBudgets maps each writable workspace file to its char budget.
+// A zero budget means uncapped: SOUL.md and IDENTITY.md carry no Hermes
+// cap, so the bootstrap budget governs them at consumption time instead.
+var artifactBudgets = map[string]int{
+	memoryFile:   memoryBudget,
+	userFile:     userBudget,
+	soulFile:     0,
+	identityFile: 0,
+}
+
+// targetPrefixes maps a /remember or /forget prefix to its file. Bare text
+// with no known prefix targets MEMORY.md.
+var targetPrefixes = map[string]string{
+	"memory":   memoryFile,
+	"user":     userFile,
+	"soul":     soulFile,
+	"identity": identityFile,
+}
+
 func memoryPath(dir, name string) string { return filepath.Join(dir, name) }
 
-// validTarget reports whether name is a curated memory file.
-func validTarget(name string) bool { return name == memoryFile || name == userFile }
-
-func budgetFor(name string) int {
-	if name == userFile {
-		return userBudget
-	}
-	return memoryBudget
+// validTarget reports whether name is a writable workspace file.
+func validTarget(name string) bool {
+	_, ok := artifactBudgets[name]
+	return ok
 }
+
+func budgetFor(name string) int { return artifactBudgets[name] }
 
 func runeLen(s string) int { return len([]rune(s)) }
 
@@ -94,7 +113,7 @@ func Remember(dir, name, line string) error {
 	if cur != "" {
 		next = cur + "\n" + line
 	}
-	if runeLen(next) > budgetFor(name) {
+	if budget := budgetFor(name); budget > 0 && runeLen(next) > budget {
 		return fmt.Errorf("%s at %d/%d chars: new entry (%d chars) exceeds the budget, consolidate entries first",
 			name, runeLen(cur), budgetFor(name), runeLen(line))
 	}

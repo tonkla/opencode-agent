@@ -105,11 +105,13 @@ func (a *app) ping(ctx context.Context, b *bot.Bot, update *models.Update) {
 // startMessage is the short welcome reply for /start.
 const startMessage = "Welcome! Send me anything to chat. /new starts a fresh session, /model shows the model, /remember saves a fact."
 
-// memoryTarget splits the optional "user:" prefix off a /remember or
-// /forget argument. Bare text targets MEMORY.md; "user:" targets USER.md.
+// memoryTarget splits the optional "<name>:" prefix off a /remember or
+// /forget argument. Bare text and unknown prefixes target MEMORY.md.
 func memoryTarget(arg string) (file, rest string) {
-	if r, ok := strings.CutPrefix(arg, "user:"); ok {
-		return userFile, strings.TrimSpace(r)
+	if i := strings.IndexByte(arg, ':'); i > 0 {
+		if file, ok := targetPrefixes[strings.ToLower(arg[:i])]; ok {
+			return file, strings.TrimSpace(arg[i+1:])
+		}
 	}
 	return memoryFile, arg
 }
