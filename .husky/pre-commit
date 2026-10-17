@@ -1,0 +1,15 @@
+staged_go_files=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+
+if [ -z "$staged_go_files" ]; then
+  exit 0
+fi
+
+unformatted=$(echo "$staged_go_files" | xargs gofmt -l)
+if [ -n "$unformatted" ]; then
+  echo "pre-commit: these staged Go files are not gofmt-clean:"
+  echo "$unformatted"
+  echo "Run 'gofmt -w' on them, re-stage, and commit again."
+  exit 1
+fi
+
+golangci-lint run --new-from-rev HEAD ./...

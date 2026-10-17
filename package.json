@@ -1,0 +1,21 @@
+{
+  "name": "opencode-agent",
+  "version": "0.1.0",
+  "description": "Personal Telegram assistant backed by a persistent OpenCode server. One live agent session. Plain text goes to it. Written in Go as a single static binary.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://github.com/tonkla/opencode-agent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tonkla/opencode-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tonkla/opencode-agent/issues"
+  },
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}
