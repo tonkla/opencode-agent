@@ -216,6 +216,10 @@ func (a *Agent) prompt(ctx context.Context, id, text string) (int, error) {
 	return status, err
 }
 
+// okReply is the whole reply when the agent produced no text, e.g. a turn
+// that only ran tools. Tool internals stay out of chat by design.
+const okReply = "👍️️"
+
 // extractAnswer returns the latest completed assistant reply and whether one
 // exists. Pure over fetched messages so tests pin it without a server.
 func extractAnswer(messages []sessionMessage) (string, bool) {
@@ -237,7 +241,7 @@ func extractAnswer(messages []sessionMessage) (string, bool) {
 	}
 	text := bytes.TrimSpace(out.Bytes())
 	if len(text) == 0 {
-		return "(empty reply)", true
+		return okReply, true
 	}
 	return string(text), true
 }

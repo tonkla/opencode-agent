@@ -25,7 +25,11 @@ func TestExtractAnswer(t *testing.T) {
 				{Type: "assistant", Time: messageTime{Created: 2, Completed: &completed}, Content: []contentPart{{Type: "text", Text: "new"}}},
 			},
 			"new", true},
-		{"empty is marked", []sessionMessage{{Type: "assistant", Time: messageTime{Completed: &completed}}}, "(empty reply)", true},
+		{"empty is marked", []sessionMessage{{Type: "assistant", Time: messageTime{Completed: &completed}}}, okReply, true},
+		{"tool-only turn answers ok without surfacing tool output",
+			[]sessionMessage{{Type: "assistant", Time: messageTime{Completed: &completed},
+				Content: []contentPart{{Type: "tool"}}}},
+			okReply, true},
 	}
 	for _, c := range cases {
 		got, ok := extractAnswer(c.messages)
