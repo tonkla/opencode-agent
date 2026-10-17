@@ -23,18 +23,20 @@ const (
 // exceed the budget fails so the agent consolidates instead of growing the
 // injected snapshot silently.
 const (
-	memoryBudget = 2200
-	userBudget   = 1375
+	memoryBudget   = 2200
+	userBudget     = 1375
+	soulBudget     = 2200
+	identityBudget = 1375
 )
 
 // artifactBudgets maps each writable workspace file to its char budget.
-// A zero budget means uncapped: SOUL.md and IDENTITY.md carry no Hermes
-// cap, so the bootstrap budget governs them at consumption time instead.
+// SOUL.md and IDENTITY.md mirror the MEMORY.md and USER.md caps so total
+// injected memory stays bounded no matter how large the files grow.
 var artifactBudgets = map[string]int{
 	memoryFile:   memoryBudget,
 	userFile:     userBudget,
-	soulFile:     0,
-	identityFile: 0,
+	soulFile:     soulBudget,
+	identityFile: identityBudget,
 }
 
 // targetPrefixes maps a /remember or /forget prefix to its file. Bare text
@@ -68,21 +70,44 @@ func readCurated(dir, name string) string {
 	return strings.TrimSpace(string(raw))
 }
 
+// snapshotSections sets the fixed section order of the bootstrap block.
+var snapshotSections = []struct{ file, title string }{
+	{memoryFile, "MEMORY (durable facts)"},
+	{userFile, "USER (stable preferences)"},
+	{soulFile, "SOUL (personality and tone)"},
+	{identityFile, "IDENTITY (agent name and vibe)"},
+}
+
+// truncateShort shrinks s to budget chars, marking the cut so readers know
+// content was lost. Injection must degrade recall, never fail a session.
+func truncateShort(s string, budget int) string {
+	r := []rune(s)
+	if len(r) <= budget {
+		return s
+	}
+	const mark = "\n[truncated]"
+	cut := budget - runeLen(mark)
+	if cut < 0 {
+		cut = 0
+	}
+	return string(r[:cut]) + mark
+}
+
 // Snapshot renders the bootstrap block injected when a session is created.
-// It returns "" when both curated files are missing or empty, so sessions
+// It returns "" when every curated file is missing or empty, so sessions
 // without memory behave exactly as before.
 func Snapshot(dir string) string {
-	mem := readCurated(dir, memoryFile)
-	user := readCurated(dir, userFile)
-	if mem == "" && user == "" {
-		return ""
-	}
 	var b strings.Builder
-	if mem != "" {
-		fmt.Fprintf(&b, "MEMORY (durable facts) [%d/%d chars]\n%s\n\n", runeLen(mem), memoryBudget, mem)
+	for _, s := range snapshotSections {
+		content := readCurated(dir, s.file)
+		if content == "" {
+			continue
+		}
+		content = truncateShort(content, budgetFor(s.file))
+		fmt.Fprintf(&b, "%s [%d/%d chars]\n%s\n\n", s.title, runeLen(content), budgetFor(s.file), content)
 	}
-	if user != "" {
-		fmt.Fprintf(&b, "USER (stable preferences) [%d/%d chars]\n%s\n\n", runeLen(user), userBudget, user)
+	if b.Len() == 0 {
+		return ""
 	}
 	b.WriteString("Maintain these files as you learn: durable facts go to MEMORY.md, preferences to USER.md, running notes to memory/YYYY-MM-DD.md.")
 	return b.String()

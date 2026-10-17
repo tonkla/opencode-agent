@@ -87,20 +87,60 @@ func TestRememberBudgetCountsRunes(t *testing.T) {
 	}
 }
 
-func TestSoulAndIdentityAreUncapped(t *testing.T) {
+func TestSoulAndIdentityShareBudgets(t *testing.T) {
 	dir := t.TempDir()
-	long := strings.Repeat("v", memoryBudget*2)
-	for _, name := range []string{soulFile, identityFile} {
-		if err := Remember(dir, name, long); err != nil {
-			t.Errorf("%s must accept long entries, got %v", name, err)
-		}
+	if err := Remember(dir, soulFile, strings.Repeat("v", soulBudget+1)); err == nil {
+		t.Error("over-budget soul write must fail")
+	}
+	if err := Remember(dir, identityFile, strings.Repeat("v", identityBudget+1)); err == nil {
+		t.Error("over-budget identity write must fail")
 	}
 	if err := Remember(dir, "NOTES.md", "x"); err == nil {
 		t.Error("files outside the registry must fail")
 	}
-	removed, err := Forget(dir, soulFile, long[:10])
+	if err := Remember(dir, soulFile, "direct, no sycophancy"); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := Forget(dir, soulFile, "sycophancy")
 	if err != nil || removed != 1 {
 		t.Errorf("soul forget = (%d,%v), want (1,nil)", removed, err)
+	}
+}
+
+func TestSnapshotRendersAllSections(t *testing.T) {
+	dir := t.TempDir()
+	for name, line := range map[string]string{
+		memoryFile:   "project uses chi router",
+		userFile:     "prefers terse replies",
+		soulFile:     "direct, no sycophancy",
+		identityFile: "keeper bot",
+	} {
+		if err := Remember(dir, name, line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap := Snapshot(dir)
+	for _, want := range []string{"MEMORY (durable facts)", "USER (stable preferences)",
+		"SOUL (personality and tone)", "IDENTITY (agent name and vibe)"} {
+		if !strings.Contains(snap, want) {
+			t.Errorf("snapshot missing section %q", want)
+		}
+	}
+}
+
+func TestSnapshotTruncatesWithMarker(t *testing.T) {
+	dir := t.TempDir()
+	// Bypass the write cap to simulate a file that grew outside /remember.
+	long := strings.Repeat("w", soulBudget+100)
+	if err := os.WriteFile(filepath.Join(dir, soulFile), []byte(long), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap := Snapshot(dir)
+	if !strings.Contains(snap, "[truncated]") {
+		t.Error("over-cap file must carry the truncation marker")
+	}
+	if strings.Contains(snap, long) {
+		t.Error("full over-cap content must not render")
 	}
 }
 
