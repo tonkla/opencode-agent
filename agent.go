@@ -25,6 +25,11 @@ type Agent struct {
 	sessionID    string
 	defaultModel *ModelRef
 	overridden   bool
+	// bootstrap marks a session that has never been prompted. The next
+	// Ask injects the memory snapshot once, then clears it. Reset and the
+	// model paths create sessions without prompting, so creation alone
+	// cannot imply the snapshot was delivered.
+	bootstrap bool
 }
 
 func (m ModelRef) payload() map[string]string {
@@ -196,6 +201,7 @@ func (a *Agent) create(ctx context.Context) (string, error) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return "", err
 	}
+	a.bootstrap = true
 	return out.Data.ID, nil
 }
 
@@ -294,8 +300,9 @@ func (a *Agent) Ask(ctx context.Context, question string) (string, error) {
 	// withSnapshot passes text through untouched when no memory files
 	// exist, so sessions without memory behave exactly as before.
 	text := question
-	if fresh {
+	if fresh || a.bootstrap {
 		text = withSnapshot(a.directory, question)
+		a.bootstrap = false
 	}
 	since := time.Now().UnixMilli()
 	status, err := a.prompt(ctx, a.sessionID, text)
@@ -325,9 +332,6 @@ func (a *Agent) Reset(ctx context.Context) error {
 	if a.sessionID != "" {
 		a.destroy(ctx, a.sessionID)
 	}
-	// Best effort: mark the boundary in the daily note. A note failure
-	// must never fail the reset itself.
-	_ = AppendNote(a.directory, "session reset")
 	id, err := a.create(ctx)
 	if err != nil {
 		return err
