@@ -14,6 +14,7 @@ import (
 
 // registerCommands wires each slash command with the allowlist guard.
 func (a *app) registerCommands(b *bot.Bot) {
+	b.RegisterHandler(bot.HandlerTypeMessageText, "start", bot.MatchTypeCommand, a.requireUser(a.start))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "ping", bot.MatchTypeCommand, a.requireUser(a.ping))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "new", bot.MatchTypeCommand, a.requireUser(a.fresh))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "model", bot.MatchTypeCommand, a.requireUser(a.model))
@@ -97,6 +98,13 @@ func describeModel(m sessionModel) string {
 
 func (a *app) ping(ctx context.Context, b *bot.Bot, update *models.Update) {
 	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "pong"})
+}
+
+// startMessage is the short welcome reply for /start.
+const startMessage = "Welcome! Send me anything to chat. /new starts a fresh session, /model shows the model."
+
+func (a *app) start(ctx context.Context, b *bot.Bot, update *models.Update) {
+	a.sendReply(ctx, b, update.Message.Chat.ID, startMessage)
 }
 
 func (a *app) fresh(ctx context.Context, b *bot.Bot, update *models.Update) {
