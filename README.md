@@ -2,7 +2,7 @@
 
 Personal Telegram assistant backed by a persistent OpenCode server. One live agent session. Plain text goes to it. Written in Go as a single static binary.
 
-Commands: `/ping` answers `pong` without touching the agent. `/new` drops the live session and starts a blank one. Anything else is sent to the agent and the reply comes back as chat messages.
+Commands: `/ping` answers `pong` without touching the agent. `/new` drops the live session and starts a blank one. `/model` alone reports the session model and thinking effort. `/model list` shows the available Zen models with their variants. `/model model#variant` switches them until the session ends, for example `/model deepseek-v4.1-flash-free#high`. A provider prefix still works and must be Zen. Only OpenCode Zen models are allowed. Names are checked against the server catalog, so unknown models and variants are rejected in chat instead of stalling the session. Anything else is sent to the agent and the reply comes back as chat messages.
 
 Only one Telegram user ID gets answers. Everyone else is ignored. The agent works inside one dedicated workspace folder.
 
@@ -22,7 +22,7 @@ Prereqs: Go 1.27+, the opencode CLI with a logged in provider (`opencode auth lo
 6. Start the server with `OPENCODE_PASSWORD=... opencode serve --hostname 127.0.0.1 --port 4096`.
 7. Run `./opencode-agent` (`-config` points elsewhere when needed).
 
-Keys: `telegram_bot_token`, `telegram_allowed_user_id`, `opencode_password`, `agent_workspace_dir`. Optional: `opencode_base_url` (default `http://127.0.0.1:4096`), `opencode_server_user` (default `opencode`), `agent_timeout_ms` (default `300000`).
+Keys: `telegram_bot_token`, `telegram_allowed_user_id`, `opencode_password`, `agent_workspace_dir`, `model` (required, Zen only, for example `deepseek-v4.1-flash-free`). Optional: `opencode_base_url` (default `http://127.0.0.1:4096`), `opencode_server_user` (default `opencode`), `agent_timeout_ms` (default `300000`), `model_variant` (default thinking effort, for example `high`).
 
 Checks: `gofmt -l *.go` must print nothing, `go vet .` must pass, `go test .` runs the unit pin. `OPENCODE_TEST_BASE_URL=http://127.0.0.1:4096 OPENCODE_TEST_PASSWORD=... go test -run TestAgentLiveServe .` replays the agent loop against a real server.
 

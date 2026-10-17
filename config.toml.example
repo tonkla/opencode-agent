@@ -9,3 +9,9 @@ agent_workspace_dir = "/Users/YOU/agent-workspace"
 opencode_base_url = "http://127.0.0.1:4096"
 opencode_server_user = "opencode"
 agent_timeout_ms = 300000
+
+# Required default model for new sessions. Only OpenCode Zen models are
+# allowed, written bare with an optional "#variant" thinking effort. The
+# session keeps it until /model overrides it.
+model = "deepseek-v4.1-flash-free"
+model_variant = "high"

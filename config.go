@@ -17,6 +17,8 @@ type Config struct {
 	OpencodePass    string `toml:"opencode_password"`
 	WorkspaceDir    string `toml:"agent_workspace_dir"`
 	AgentTimeoutMs  int    `toml:"agent_timeout_ms"`
+	Model           string `toml:"model"`
+	ModelVariant    string `toml:"model_variant"`
 }
 
 // LoadConfig reads path once at startup and fails fast on bad values. It
@@ -62,6 +64,9 @@ func LoadConfig(path string) (Config, error) {
 		cfg.AgentTimeoutMs = 300000
 	} else if cfg.AgentTimeoutMs < 0 {
 		return Config{}, fmt.Errorf("agent_timeout_ms must be a positive integer")
+	}
+	if cfg.Model == "" {
+		return Config{}, fmt.Errorf("model is required: this agent only runs OpenCode Zen models")
 	}
 	return cfg, nil
 }

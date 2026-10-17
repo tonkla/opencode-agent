@@ -59,7 +59,7 @@ func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
-	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nopencode_password = \"pw\"\nagent_workspace_dir = \"/tmp/ws\"\n"
+	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nopencode_password = \"pw\"\nagent_workspace_dir = \"/tmp/ws\"\nmodel = \"opencode/deepseek-v4.1-flash-free\"\n"
 	cfg, err := LoadConfig(writeTOML(t, body))
 	if err != nil {
 		t.Fatal(err)
@@ -70,8 +70,16 @@ func TestLoadConfigDefaults(t *testing.T) {
 }
 
 func TestLoadConfigRejectsBadTimeout(t *testing.T) {
-	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nopencode_password = \"pw\"\nagent_workspace_dir = \"/tmp/ws\"\nagent_timeout_ms = -5\n"
+	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nopencode_password = \"pw\"\nagent_workspace_dir = \"/tmp/ws\"\nagent_timeout_ms = -5\nmodel = \"opencode/deepseek-v4.1-flash-free\"\n"
 	if _, err := LoadConfig(writeTOML(t, body)); err == nil {
 		t.Error("expected timeout error")
+	}
+}
+
+func TestLoadConfigRequiresModel(t *testing.T) {
+	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nopencode_password = \"pw\"\nagent_workspace_dir = \"/tmp/ws\"\n"
+	_, err := LoadConfig(writeTOML(t, body))
+	if err == nil || !strings.Contains(err.Error(), "Zen") {
+		t.Errorf("expected Zen-only error, got %v", err)
 	}
 }
