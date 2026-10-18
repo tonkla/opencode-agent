@@ -31,8 +31,9 @@ func splitMessage(text string) []string {
 }
 
 type app struct {
-	agent  *Agent
-	config Config
+	agent   *Agent
+	config  Config
+	history *chatHistory
 }
 
 func (a *app) requireUser(next bot.HandlerFunc) bot.HandlerFunc {
@@ -40,11 +41,13 @@ func (a *app) requireUser(next bot.HandlerFunc) bot.HandlerFunc {
 		if update.Message == nil || update.Message.From == nil || update.Message.From.ID != a.config.AllowedUserID {
 			return
 		}
+		a.history.appendUser(update.Message.Text)
 		next(ctx, b, update)
 	}
 }
 
 func (a *app) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text string) {
+	a.history.appendAgent(text)
 	for _, chunk := range splitMessage(text) {
 		_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: chunk})
 	}
@@ -141,7 +144,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	a := &app{agent: agent, config: cfg}
+	a := &app{agent: agent, config: cfg, history: newChatHistory(cfg.WorkspaceDir)}
 	a.registerCommands(b)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "", bot.MatchTypePrefix, a.requireUser(a.answer))
 	b.Start(ctx)

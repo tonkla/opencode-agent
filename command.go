@@ -152,7 +152,7 @@ func commas(n int64) string {
 }
 
 func (a *app) ping(ctx context.Context, b *bot.Bot, update *models.Update) {
-	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "pong"})
+	a.sendReply(ctx, b, update.Message.Chat.ID, "pong")
 }
 
 // startMessage is the short welcome reply for /start.
@@ -207,5 +207,6 @@ func (a *app) fresh(ctx context.Context, b *bot.Bot, update *models.Update) {
 		a.sendReply(ctx, b, chatID, "Could not start a fresh session. The local server may be restarting; try again in a moment.")
 		return
 	}
+	a.history.reset()
 	a.sendReply(ctx, b, chatID, "Fresh session started.")
 }
