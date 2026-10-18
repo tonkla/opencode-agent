@@ -28,9 +28,11 @@ Checks: `gofmt -l *.go` must print nothing, `go vet .` must pass, `go test .` ru
 
 ## Staying alive with launchd
 
-One service is in `launchd/`. Edit the `YOU` placeholders first. Build the binary into the checkout, then run:
+One service template is in `launchd/`. Copy it to the real plist name, which git ignores so your paths stay private, and fill in the `YOU` placeholders. Build the binary into the checkout, then run:
 
 ```
+cp launchd/com.opencode-agent.telegram.plist.example launchd/com.opencode-agent.telegram.plist
+# edit the YOU placeholders in launchd/com.opencode-agent.telegram.plist
 cp launchd/com.opencode-agent.telegram.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.opencode-agent.telegram.plist
 ```
