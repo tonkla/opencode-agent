@@ -247,6 +247,11 @@ func (s *ServeSupervisor) supervise(ctx context.Context, firstReady chan<- error
 // always wins.
 func (s *ServeSupervisor) start() (*exec.Cmd, error) {
 	cmd := exec.Command(s.binary, "serve", "--hostname", "127.0.0.1", "--port", strconv.Itoa(s.port))
+	// A terminal Ctrl+C reaches the whole foreground process group. Without
+	// its own group the child dies from the parent's SIGINT instead of the
+	// supervisor's SIGTERM, and the death reads as a crash (exit status
+	// 130). Unix-only, like the launchd setup around it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	env := os.Environ()
 	kept := env[:0]
 	for _, kv := range env {

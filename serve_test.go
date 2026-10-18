@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -152,6 +153,20 @@ func TestSupervisorRestartsDeadServer(t *testing.T) {
 	first := sup.PID()
 	if first == 0 {
 		t.Fatal("no child pid after start")
+	}
+	// The child must sit outside our process group so a terminal Ctrl+C
+	// reaches the parent only. Otherwise the child dies with exit status
+	// 130 and the death reads as a crash.
+	selfGroup, err := syscall.Getpgid(os.Getpid())
+	if err != nil {
+		t.Fatalf("own pgid: %v", err)
+	}
+	childGroup, err := syscall.Getpgid(first)
+	if err != nil {
+		t.Fatalf("child pgid: %v", err)
+	}
+	if childGroup == selfGroup {
+		t.Fatalf("child shares our process group %d; Ctrl+C would kill it", selfGroup)
 	}
 
 	if err := syscall.Kill(first, syscall.SIGKILL); err != nil {
