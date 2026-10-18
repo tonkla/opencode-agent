@@ -29,7 +29,7 @@ func (a *app) model(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if arg == "" {
 		current, err := a.agent.CurrentModel(ctx)
 		if err != nil {
-			a.sendReply(ctx, b, chatID, "Could not read the session model. Is opencode serve running?")
+			a.sendReply(ctx, b, chatID, "Could not read the session model. The local server may be restarting; try again in a moment.")
 			return
 		}
 		a.sendReply(ctx, b, chatID, describeModel(current))
@@ -38,7 +38,7 @@ func (a *app) model(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if arg == "list" {
 		catalog, err := a.agent.Catalog(ctx)
 		if err != nil {
-			a.sendReply(ctx, b, chatID, "Could not read the model catalog. Is opencode serve running?")
+			a.sendReply(ctx, b, chatID, "Could not read the model catalog. The local server may be restarting; try again in a moment.")
 			return
 		}
 		a.sendReply(ctx, b, chatID, formatCatalog(catalog))
@@ -151,7 +151,7 @@ func (a *app) fresh(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
 	a.typing(ctx, b, chatID)
 	if err := a.agent.Reset(ctx); err != nil {
-		a.sendReply(ctx, b, chatID, "Could not start a fresh session. Is opencode serve running?")
+		a.sendReply(ctx, b, chatID, "Could not start a fresh session. The local server may be restarting; try again in a moment.")
 		return
 	}
 	a.sendReply(ctx, b, chatID, "Fresh session started.")

@@ -59,7 +59,7 @@ func (a *app) answer(ctx context.Context, b *bot.Bot, update *models.Update) {
 	a.typing(ctx, b, chatID)
 	reply, err := a.agent.Ask(ctx, update.Message.Text)
 	if err != nil {
-		a.sendReply(ctx, b, chatID, "The agent request failed. Is opencode serve running?")
+		a.sendReply(ctx, b, chatID, "The agent request failed. The local server may be restarting; try again in a moment.")
 		return
 	}
 	a.sendReply(ctx, b, chatID, reply)
@@ -106,10 +106,16 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	sup, err := StartServe(ctx, ServeOptions{})
+	if err != nil {
+		return fmt.Errorf("local opencode server failed to start: %w", err)
+	}
+	defer sup.Shutdown()
+
 	agent := NewAgent(AgentOptions{
-		BaseURL:   cfg.OpencodeBaseURL,
-		Username:  cfg.OpencodeUser,
-		Password:  cfg.OpencodePass,
+		BaseURL:   sup.BaseURL(),
+		Username:  serveUsername,
+		Password:  sup.Password(),
 		Directory: cfg.WorkspaceDir,
 		Timeout:   time.Duration(cfg.AgentTimeoutMs) * time.Millisecond,
 	})
@@ -123,7 +129,7 @@ func run(ctx context.Context) error {
 	}
 	agent.defaultModel = &ref
 	if err := agent.Reset(ctx); err != nil {
-		return fmt.Errorf("opencode serve unreachable: %w", err)
+		return fmt.Errorf("local opencode server is not responding: %w", err)
 	}
 	if err := agent.ValidateModel(ctx, *agent.defaultModel); err != nil {
 		return fmt.Errorf("bad default model in config.toml: %w", err)

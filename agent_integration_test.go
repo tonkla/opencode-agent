@@ -5,28 +5,45 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-// TestAgentLiveServe exercises Reset and Ask against a real opencode serve.
-// Run it with a server up: OPENCODE_TEST_BASE_URL=http://127.0.0.1:41xx
-// OPENCODE_TEST_PASSWORD=... go test -run TestAgentLiveServe .
-func TestAgentLiveServe(t *testing.T) {
-	baseURL := os.Getenv("OPENCODE_TEST_BASE_URL")
-	if baseURL == "" {
-		t.Skip("no live server; set OPENCODE_TEST_BASE_URL")
+// startSupervised boots a supervisor-managed server for the test and reaps
+// it afterwards. No hand-started server is needed.
+func startSupervised(t *testing.T) *ServeSupervisor {
+	t.Helper()
+	if _, err := exec.LookPath("opencode"); err != nil {
+		t.Skip("opencode binary not in PATH")
 	}
-	ctx := context.Background()
-	a := NewAgent(AgentOptions{
-		BaseURL:   baseURL,
-		Username:  "opencode",
-		Password:  os.Getenv("OPENCODE_TEST_PASSWORD"),
-		Directory: t.TempDir(),
+	sup, err := StartServe(context.Background(), ServeOptions{RestartDelay: time.Second})
+	if err != nil {
+		t.Fatalf("start managed serve: %v", err)
+	}
+	t.Cleanup(sup.Shutdown)
+	return sup
+}
+
+func supervisedAgent(t *testing.T, sup *ServeSupervisor, dir string) *Agent {
+	t.Helper()
+	return NewAgent(AgentOptions{
+		BaseURL:   sup.BaseURL(),
+		Username:  serveUsername,
+		Password:  sup.Password(),
+		Directory: dir,
 		Timeout:   2 * time.Minute,
 	})
+}
+
+// TestAgentLiveServe exercises Reset and Ask against a supervisor-managed
+// server. Ask still needs the usual `opencode auth login` credentials.
+func TestAgentLiveServe(t *testing.T) {
+	sup := startSupervised(t)
+	ctx := context.Background()
+	a := supervisedAgent(t, sup, t.TempDir())
 	if err := a.Reset(ctx); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
@@ -46,22 +63,13 @@ func TestAgentLiveServe(t *testing.T) {
 // workspace dir. Sessions created without a location land in the server's
 // own directory, so the agent would not recognize its workspace.
 func TestAgentLiveSessionLocation(t *testing.T) {
-	baseURL := os.Getenv("OPENCODE_TEST_BASE_URL")
-	if baseURL == "" {
-		t.Skip("no live server; set OPENCODE_TEST_BASE_URL")
-	}
+	sup := startSupervised(t)
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	a := NewAgent(AgentOptions{
-		BaseURL:   baseURL,
-		Username:  "opencode",
-		Password:  os.Getenv("OPENCODE_TEST_PASSWORD"),
-		Directory: dir,
-		Timeout:   2 * time.Minute,
-	})
+	a := supervisedAgent(t, sup, dir)
 	if err := a.Reset(ctx); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
@@ -97,29 +105,24 @@ func TestAgentLiveSessionLocation(t *testing.T) {
 	t.Fatal("telegram session not listed under the workspace dir")
 }
 
-// TestAgentLiveModel exercises the /model paths against a real serve using
-// OPENCODE_TEST_MODEL in provider/model#variant form.
+// TestAgentLiveModel exercises the /model paths against a
+// supervisor-managed server using OPENCODE_TEST_MODEL in
+// provider/model#variant form.
 func TestAgentLiveModel(t *testing.T) {
-	baseURL := os.Getenv("OPENCODE_TEST_BASE_URL")
 	raw := os.Getenv("OPENCODE_TEST_MODEL")
-	if baseURL == "" || raw == "" {
-		t.Skip("set OPENCODE_TEST_BASE_URL and OPENCODE_TEST_MODEL")
+	if raw == "" {
+		t.Skip("set OPENCODE_TEST_MODEL")
 	}
 	ref, err := ParseModelRef(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
+	sup := startSupervised(t)
 	ctx := context.Background()
 	newAgent := func() *Agent {
-		return NewAgent(AgentOptions{
-			BaseURL:   baseURL,
-			Username:  "opencode",
-			Password:  os.Getenv("OPENCODE_TEST_PASSWORD"),
-			Directory: t.TempDir(),
-			Timeout:   2 * time.Minute,
-			Model:     ref,
-			HasModel:  true,
-		})
+		a := supervisedAgent(t, sup, t.TempDir())
+		a.defaultModel = &ref
+		return a
 	}
 	a := newAgent()
 	if err := a.Reset(ctx); err != nil {

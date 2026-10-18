@@ -10,7 +10,7 @@ Only one Telegram user ID gets answers. Everyone else is ignored. The agent work
 
 ## How it works
 
-`main.go` runs the Telegram bot with long polling. `agent.go` holds the one live OpenCode session and talks to `opencode serve` over HTTP with basic auth. `config.go` reads `config.toml` once at startup and fails fast on bad values. Unknown keys are rejected so typos never silently become defaults.
+`main.go` runs the Telegram bot with long polling. `serve.go` starts a private `opencode serve` child on a loopback port with a generated password, waits until it answers, and restarts it when it dies. `agent.go` holds the one live OpenCode session and talks to that child over HTTP with basic auth. `config.go` reads `config.toml` once at startup and fails fast on bad values. Unknown keys are rejected so typos never silently become defaults.
 
 ## Setup on the Mac mini
 
@@ -18,27 +18,23 @@ Prereqs: Go 1.27+, the opencode CLI with a logged in provider (`opencode auth lo
 
 1. Talk to BotFather on Telegram and create a bot. Keep the token.
 2. Find your Telegram user ID. Message `@userinfobot` and copy the number.
-3. Pick a server password and export it as `OPENCODE_PASSWORD`. The bot and the server must share it.
-4. Copy `config.toml.example` to `config.toml` and fill in the values.
-5. Run `go mod download && go build -o opencode-agent .`.
-6. Start the server with `OPENCODE_PASSWORD=... opencode serve --hostname 127.0.0.1 --port 4096`.
-7. Run `./opencode-agent` (`-config` points elsewhere when needed).
+3. Copy `config.toml.example` to `config.toml` and fill in the values.
+4. Run `go mod download && go build -o opencode-agent .`.
+5. Run `./opencode-agent` (`-config` points elsewhere when needed). The bot starts its own `opencode serve` and needs no separate server step.
 
-Keys: `telegram_bot_token`, `telegram_allowed_user_id`, `opencode_password`, `agent_workspace_dir`, `model` (required, Zen only, for example `deepseek-v4.1-flash-free`). Optional: `opencode_base_url` (default `http://127.0.0.1:4096`), `opencode_server_user` (default `opencode`), `agent_timeout_ms` (default `300000`), `model_variant` (default thinking effort, for example `high`).
+Keys: `telegram_bot_token`, `telegram_allowed_user_id`, `agent_workspace_dir`, `model` (required, Zen only, for example `deepseek-v4.1-flash-free`). Optional: `agent_timeout_ms` (default `300000`), `model_variant` (default thinking effort, for example `high`).
 
-Checks: `gofmt -l *.go` must print nothing, `go vet .` must pass, `go test .` runs the unit pin. `OPENCODE_TEST_BASE_URL=http://127.0.0.1:4096 OPENCODE_TEST_PASSWORD=... go test -run TestAgentLiveServe .` replays the agent loop against a real server.
+Checks: `gofmt -l *.go` must print nothing, `go vet .` must pass, `go test .` runs the unit pin. `go test -run 'TestSupervisor|TestAgentLive' .` boots a supervisor-managed server per test and replays the agent loop against it. Only `TestAgentLiveModel` needs one env var: `OPENCODE_TEST_MODEL` in provider/model#variant form.
 
 ## Staying alive with launchd
 
-Two services are in `launchd/`. Edit the `YOU` placeholders and the password first. Build the binary into the checkout, then run:
+One service is in `launchd/`. Edit the `YOU` placeholders first. Build the binary into the checkout, then run:
 
 ```
-cp launchd/com.opencode-agent.serve.plist ~/Library/LaunchAgents/
 cp launchd/com.opencode-agent.telegram.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.opencode-agent.serve.plist
 launchctl load ~/Library/LaunchAgents/com.opencode-agent.telegram.plist
 ```
 
-Logs land in `~/Library/Logs/`. If the bot exits it restarts after 10 seconds. It also fails fast at boot when the server is down, so launchd retries until the server is up.
+Logs land in `~/Library/Logs/`. If the bot exits it restarts after 10 seconds. The bot also restarts its internal `opencode serve` whenever that child dies, so no second service watches the server.
 
 Note: a bot restart loses the in memory session id. The next message opens a fresh session automatically.

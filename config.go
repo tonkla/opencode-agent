@@ -10,15 +10,12 @@ import (
 // Config is the bot's entire configuration. It lives in config.toml so one
 // file holds every value launchd and terminals would otherwise inject.
 type Config struct {
-	BotToken        string `toml:"telegram_bot_token"`
-	AllowedUserID   int64  `toml:"telegram_allowed_user_id"`
-	OpencodeBaseURL string `toml:"opencode_base_url"`
-	OpencodeUser    string `toml:"opencode_server_user"`
-	OpencodePass    string `toml:"opencode_password"`
-	WorkspaceDir    string `toml:"agent_workspace_dir"`
-	AgentTimeoutMs  int    `toml:"agent_timeout_ms"`
-	Model           string `toml:"model"`
-	ModelVariant    string `toml:"model_variant"`
+	BotToken       string `toml:"telegram_bot_token"`
+	AllowedUserID  int64  `toml:"telegram_allowed_user_id"`
+	WorkspaceDir   string `toml:"agent_workspace_dir"`
+	AgentTimeoutMs int    `toml:"agent_timeout_ms"`
+	Model          string `toml:"model"`
+	ModelVariant   string `toml:"model_variant"`
 }
 
 // LoadConfig reads path once at startup and fails fast on bad values. It
@@ -44,21 +41,12 @@ func LoadConfig(path string) (Config, error) {
 	if cfg.AllowedUserID == 0 {
 		missing = append(missing, "telegram_allowed_user_id")
 	}
-	if cfg.OpencodePass == "" {
-		missing = append(missing, "opencode_password")
-	}
 	if cfg.WorkspaceDir == "" {
 		missing = append(missing, "agent_workspace_dir")
 	}
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing keys in %s: %s (copy config.toml.example to config.toml and fill in the values)",
 			path, strings.Join(missing, ", "))
-	}
-	if cfg.OpencodeBaseURL == "" {
-		cfg.OpencodeBaseURL = "http://127.0.0.1:4096"
-	}
-	if cfg.OpencodeUser == "" {
-		cfg.OpencodeUser = "opencode"
 	}
 	if cfg.AgentTimeoutMs == 0 {
 		cfg.AgentTimeoutMs = 300000
