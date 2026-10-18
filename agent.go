@@ -222,34 +222,64 @@ func (a *Agent) prompt(ctx context.Context, id, text string) (int, error) {
 	return status, err
 }
 
-// okReply is the whole reply when the agent produced no text, e.g. a turn
-// that only ran tools. Tool internals stay out of chat by design.
+// okReply is the whole reply when a finished turn produced no text, e.g.
+// one that only ran tools. Tool internals stay out of chat by design.
 const okReply = "👍️️"
 
-// extractAnswer returns the latest completed assistant reply and whether one
-// exists. Pure over fetched messages so tests pin it without a server.
+// extractAnswer returns the newest completed assistant reply carrying text
+// and whether one exists. Textless rounds (tool calls still running) report
+// false so the waiter keeps waiting for the turn to end instead of answering
+// early. Pure over fetched messages so tests pin it without a server.
 func extractAnswer(messages []sessionMessage) (string, bool) {
-	var last *sessionMessage
+	var best *sessionMessage
+	var bestText string
 	for i := range messages {
 		m := &messages[i]
-		if m.Type == "assistant" && m.Time.Completed != nil {
-			last = m
+		if m.Type != "assistant" || m.Time.Completed == nil {
+			continue
 		}
+		if best != nil && m.Time.Created <= best.Time.Created {
+			continue
+		}
+		text, ok := messageText(m)
+		if !ok {
+			continue
+		}
+		best, bestText = m, text
 	}
-	if last == nil {
+	if best == nil {
 		return "", false
 	}
+	return bestText, true
+}
+
+// messageText joins one message's text parts and reports whether any
+// survived trimming.
+func messageText(m *sessionMessage) (string, bool) {
 	var out bytes.Buffer
-	for _, c := range last.Content {
+	for _, c := range m.Content {
 		if c.Type == "text" {
 			out.WriteString(c.Text + "\n")
 		}
 	}
 	text := bytes.TrimSpace(out.Bytes())
 	if len(text) == 0 {
-		return okReply, true
+		return "", false
 	}
 	return string(text), true
+}
+
+// turnOver reports whether the turn ended. The server appends an idle
+// marker once the turn settles, after the last assistant message. Without
+// it a poll landing between tool rounds would mistake an intermediate
+// textless message for the answer.
+func turnOver(fresh []sessionMessage) bool {
+	for i := range fresh {
+		if fresh[i].Type == "idle" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Agent) waitForAnswer(ctx context.Context, id string, since int64) (string, error) {
@@ -259,14 +289,21 @@ func (a *Agent) waitForAnswer(ctx context.Context, id string, since int64) (stri
 		if err == nil && status == http.StatusOK {
 			var out envelope[[]sessionMessage]
 			if err := json.Unmarshal(raw, &out); err == nil {
-				var fresh []sessionMessage
+				var fresh, assistants []sessionMessage
 				for _, m := range out.Data {
-					if m.Type == "assistant" && m.Time.Created >= since {
-						fresh = append(fresh, m)
+					if m.Time.Created < since {
+						continue
+					}
+					fresh = append(fresh, m)
+					if m.Type == "assistant" {
+						assistants = append(assistants, m)
 					}
 				}
-				if answer, ok := extractAnswer(fresh); ok {
+				if answer, ok := extractAnswer(assistants); ok {
 					return answer, nil
+				}
+				if turnOver(fresh) {
+					return okReply, nil
 				}
 			}
 		}
