@@ -105,6 +105,49 @@ func TestAgentLiveSessionLocation(t *testing.T) {
 	t.Fatal("telegram session not listed under the workspace dir")
 }
 
+// TestAgentLiveUsage reads counters and the context window from a fresh
+// supervisor-managed session without prompting, so it costs no model call.
+func TestAgentLiveUsage(t *testing.T) {
+	sup := startSupervised(t)
+	ctx := context.Background()
+	a := supervisedAgent(t, sup, t.TempDir())
+	catalog, err := a.Catalog(ctx)
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
+	var ref *ModelRef
+	for _, e := range catalog {
+		if e.Provider == zenProvider && e.Limit.Context > 0 {
+			r := ModelRef{Provider: e.Provider, ID: e.ID}
+			ref = &r
+			break
+		}
+	}
+	if ref == nil {
+		t.Skip("no Zen model with a context limit in the catalog")
+	}
+	a.defaultModel = ref
+	if err := a.Reset(ctx); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	u, err := a.Usage(ctx)
+	if err != nil {
+		t.Fatalf("usage: %v", err)
+	}
+	if !u.HasModel || u.ModelID != ref.ID {
+		t.Fatalf("model identity lost: %+v", u)
+	}
+	if !u.HasLimit || u.Limit <= 0 {
+		t.Fatalf("context limit missing: %+v", u)
+	}
+	if u.Input != 0 || u.Output != 0 {
+		t.Fatalf("fresh session must read zero: %+v", u)
+	}
+	if u.left() != u.Limit-u.used() {
+		t.Fatalf("left must equal limit minus used: %+v", u)
+	}
+}
+
 // TestAgentLiveModel exercises the /model paths against a
 // supervisor-managed server using OPENCODE_TEST_MODEL in
 // provider/model#variant form.

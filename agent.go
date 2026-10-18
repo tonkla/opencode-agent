@@ -349,6 +349,9 @@ type catalogEntry struct {
 	Provider string           `json:"providerID"`
 	ID       string           `json:"id"`
 	Variants []catalogVariant `json:"variants"`
+	Limit    struct {
+		Context int64 `json:"context"`
+	} `json:"limit"`
 }
 
 // zenProvider is the only model provider this agent may use. OpenCode Zen
@@ -492,6 +495,107 @@ func (a *Agent) CurrentModel(ctx context.Context) (sessionModel, error) {
 	}
 	m := out.Data.Model
 	return sessionModel{ID: m.ID, Provider: m.Provider, Variant: m.Variant, HasModel: true, Overridden: a.overridden}, nil
+}
+
+// sessionUsage is everything /usage reports. Limit is the model's context
+// window from the catalog. Left is Limit minus used, floored at zero.
+type sessionUsage struct {
+	Input    int64
+	Output   int64
+	ModelID  string
+	provider string
+	Variant  string
+	HasModel bool
+	Limit    int64
+	HasLimit bool
+}
+
+// used counts input plus output. Both occupy the window going forward,
+// so their sum is what the context-left figure subtracts.
+func (u sessionUsage) used() int64 { return u.Input + u.Output }
+
+func (u sessionUsage) left() int64 {
+	if left := u.Limit - u.used(); left > 0 {
+		return left
+	}
+	return 0
+}
+
+// parseSessionUsage reads the session-get body into counters and model
+// identity. The context limit joins later from the catalog. Pure over the
+// body so tests pin it without a server.
+func parseSessionUsage(raw []byte) (sessionUsage, error) {
+	var out envelope[struct {
+		Model *struct {
+			ID       string `json:"id"`
+			Provider string `json:"providerID"`
+			Variant  string `json:"variant"`
+		} `json:"model"`
+		Tokens struct {
+			Input  int64 `json:"input"`
+			Output int64 `json:"output"`
+		} `json:"tokens"`
+	}]
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return sessionUsage{}, err
+	}
+	u := sessionUsage{Input: out.Data.Tokens.Input, Output: out.Data.Tokens.Output}
+	if m := out.Data.Model; m != nil {
+		u.HasModel = true
+		u.ModelID, u.provider, u.Variant = m.ID, m.Provider, m.Variant
+	}
+	return u, nil
+}
+
+// modelLimit finds the context window for one catalog model. Zero and
+// missing limits report false so callers omit the context line instead of
+// printing a bogus window.
+func modelLimit(catalog []catalogEntry, provider, id string) (int64, bool) {
+	for _, e := range catalog {
+		if e.Provider == provider && e.ID == id && e.Limit.Context > 0 {
+			return e.Limit.Context, true
+		}
+	}
+	return 0, false
+}
+
+// Usage reports the live session's token counters and, when the session
+// model is in the catalog, its context window. A catalog miss still
+// returns the counters without a limit instead of failing the command.
+func (a *Agent) Usage(ctx context.Context) (sessionUsage, error) {
+	a.mu <- struct{}{}
+	defer func() { <-a.mu }()
+
+	if a.sessionID == "" || !a.alive(ctx, a.sessionID) {
+		id, err := a.create(ctx)
+		if err != nil {
+			return sessionUsage{}, err
+		}
+		a.sessionID = id
+		a.overridden = false
+	}
+	status, raw, err := a.call(ctx, http.MethodGet, "/session/"+url.PathEscape(a.sessionID), nil)
+	if err != nil {
+		return sessionUsage{}, err
+	}
+	if status != http.StatusOK {
+		return sessionUsage{}, fmt.Errorf("session get failed with %d", status)
+	}
+	u, err := parseSessionUsage(raw)
+	if err != nil {
+		return sessionUsage{}, err
+	}
+	if !u.HasModel {
+		return u, nil
+	}
+	catalog, err := a.Catalog(ctx)
+	if err != nil {
+		return u, nil
+	}
+	if limit, ok := modelLimit(catalog, u.provider, u.ModelID); ok {
+		u.Limit, u.HasLimit = limit, true
+	}
+	return u, nil
 }
 
 // SetModel switches the live session to ref until the session ends.
