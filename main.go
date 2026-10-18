@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -41,13 +42,33 @@ func (a *app) requireUser(next bot.HandlerFunc) bot.HandlerFunc {
 		if update.Message == nil || update.Message.From == nil || update.Message.From.ID != a.config.AllowedUserID {
 			return
 		}
-		a.history.appendUser(update.Message.Text)
+		if !isNewCommand(update.Message.Text) {
+			a.history.appendUser(update.Message.Text)
+		}
 		next(ctx, b, update)
 	}
 }
 
+// isNewCommand reports a /new invocation, with an optional @bot suffix.
+// The /new round trip stays out of history, so it needs no exact match
+// against the reply text.
+func isNewCommand(text string) bool {
+	rest, ok := strings.CutPrefix(text, "/new")
+	return ok && (rest == "" || rest[0] == ' ' || rest[0] == '@')
+}
+
 func (a *app) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	a.history.appendAgent(text)
+	a.sendChunks(ctx, b, chatID, text)
+}
+
+// sendReplySilent delivers one reply without persisting it, for session
+// mechanics like the /new acknowledgement that are not conversation.
+func (a *app) sendReplySilent(ctx context.Context, b *bot.Bot, chatID int64, text string) {
+	a.sendChunks(ctx, b, chatID, text)
+}
+
+func (a *app) sendChunks(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	for _, chunk := range splitMessage(text) {
 		_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: chunk})
 	}

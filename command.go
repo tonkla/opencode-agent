@@ -212,5 +212,5 @@ func (a *app) fresh(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 	a.history.reset()
-	a.sendReply(ctx, b, chatID, "Fresh session started.")
+	a.sendReplySilent(ctx, b, chatID, "Fresh session started.")
 }

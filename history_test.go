@@ -1,10 +1,18 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 func testClock(at ...time.Time) (func() time.Time, *int) {
@@ -75,6 +83,85 @@ func TestHistoryResetStartsNewFile(t *testing.T) {
 	}
 	if string(after) != "**User** _11:45:40_: after\n\n" {
 		t.Errorf("new file wrong: %q", after)
+	}
+}
+
+func TestIsNewCommand(t *testing.T) {
+	for text, want := range map[string]bool{
+		"/new": true, "/new@agentbot": true, "/new please": true,
+		"/news": false, "/remember x": false, "talk about /new": false,
+		" /new": false, "": false,
+	} {
+		if got := isNewCommand(text); got != want {
+			t.Errorf("isNewCommand(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+func TestRequireUserSkipsNew(t *testing.T) {
+	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
+	a := &app{config: Config{AllowedUserID: 7}, history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	called := false
+	next := bot.HandlerFunc(func(context.Context, *bot.Bot, *models.Update) { called = true })
+	update := &models.Update{Message: &models.Message{
+		Text: "/new", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
+	}}
+	a.requireUser(next)(context.Background(), nil, update)
+	if !called {
+		t.Error("guarded handler must still run for /new")
+	}
+	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
+		t.Error("/new must leave no history behind")
+	}
+	update.Message.Text = "hello"
+	a.requireUser(next)(context.Background(), nil, update)
+	raw, err := os.ReadFile(filepath.Join(a.history.baseDir, "history", "20261018", "1130.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "**User**") || !strings.Contains(string(raw), "hello") {
+		t.Errorf("plain text must be logged: %q", raw)
+	}
+}
+
+func testBot(t *testing.T, hits *atomic.Int64) *bot.Bot {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "sendMessage") {
+			hits.Add(1)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1,"chat":{"id":1,"type":"private"},"date":1,"text":"x"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"t"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	b, err := bot.New("test-token", bot.WithServerURL(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestSendReplySilentSkipsHistory(t *testing.T) {
+	var hits atomic.Int64
+	b := testBot(t, &hits)
+	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
+	a := &app{history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	a.sendReplySilent(context.Background(), b, 1, "Fresh session started.")
+	if hits.Load() != 1 {
+		t.Fatalf("silent reply must still send, %d sends", hits.Load())
+	}
+	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
+		t.Error("silent reply must leave no history behind")
+	}
+	a.sendReply(context.Background(), b, 1, "logged")
+	raw, err := os.ReadFile(filepath.Join(a.history.baseDir, "history", "20261018", "1130.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "logged") {
+		t.Errorf("plain reply must be logged: %q", raw)
 	}
 }
 
