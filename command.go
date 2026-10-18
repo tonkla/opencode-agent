@@ -51,8 +51,10 @@ func (a *app) model(ctx context.Context, b *bot.Bot, update *models.Update) {
 		a.sendReply(ctx, b, chatID, err.Error()+suggestSuffix(ctx, a.agent, arg))
 		return
 	}
-	a.typing(ctx, b, chatID)
-	if err := a.agent.SetModel(ctx, ref); err != nil {
+	stop := a.keepTyping(ctx, b, chatID)
+	err = a.agent.SetModel(ctx, ref)
+	stop()
+	if err != nil {
 		a.sendReply(ctx, b, chatID, "Could not switch model: "+err.Error())
 		return
 	}
@@ -202,8 +204,10 @@ func (a *app) start(ctx context.Context, b *bot.Bot, update *models.Update) {
 
 func (a *app) fresh(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
-	a.typing(ctx, b, chatID)
-	if err := a.agent.Reset(ctx); err != nil {
+	stop := a.keepTyping(ctx, b, chatID)
+	err := a.agent.Reset(ctx)
+	stop()
+	if err != nil {
 		a.sendReply(ctx, b, chatID, "Could not start a fresh session. The local server may be restarting; try again in a moment.")
 		return
 	}

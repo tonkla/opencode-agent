@@ -57,10 +57,37 @@ func (a *app) typing(ctx context.Context, b *bot.Bot, chatID int64) {
 	_, _ = b.SendChatAction(ctx, &bot.SendChatActionParams{ChatID: chatID, Action: models.ChatActionTyping})
 }
 
+// typingInterval re-sends the indicator faster than its server-side
+// lifetime of about five seconds, so slow turns never go quiet. A var so
+// tests can shrink it.
+var typingInterval = 4 * time.Second
+
+// keepTyping holds the typing indicator for a slow turn and returns its
+// stop. Callers stop it when the wait ends. A cancelled parent stops it
+// too, so the goroutine cannot leak.
+func (a *app) keepTyping(ctx context.Context, b *bot.Bot, chatID int64) context.CancelFunc {
+	live, stop := context.WithCancel(ctx)
+	a.typing(live, b, chatID)
+	go func() {
+		t := time.NewTicker(typingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-live.Done():
+				return
+			case <-t.C:
+				a.typing(live, b, chatID)
+			}
+		}
+	}()
+	return stop
+}
+
 func (a *app) answer(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
-	a.typing(ctx, b, chatID)
+	stop := a.keepTyping(ctx, b, chatID)
 	reply, err := a.agent.Ask(ctx, update.Message.Text)
+	stop()
 	if err != nil {
 		a.sendReply(ctx, b, chatID, "The agent request failed. The local server may be restarting; try again in a moment.")
 		return
