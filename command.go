@@ -23,20 +23,32 @@ func (a *app) registerCommands(b *bot.Bot) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "usage", bot.MatchTypeCommand, a.requireUser(a.usage))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "remember", bot.MatchTypeCommand, a.requireUser(a.remember))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "forget", bot.MatchTypeCommand, a.requireUser(a.forget))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "help", bot.MatchTypeCommand, a.requireUser(a.help))
 }
 
 // menuCommands lists every slash command shown in the Telegram menu, one
 // entry per registered handler. Pure so tests pin it.
 func menuCommands() []models.BotCommand {
 	return []models.BotCommand{
-		{Command: "start", Description: "Welcome message"},
+		{Command: "start", Description: "Start a fresh session (alias of /new)"},
 		{Command: "ping", Description: "Check the bot is alive"},
 		{Command: "new", Description: "Start a fresh session"},
 		{Command: "model", Description: "Show or switch the session model"},
 		{Command: "usage", Description: "Show token usage"},
 		{Command: "remember", Description: "Save a fact"},
 		{Command: "forget", Description: "Forget matching lines"},
+		{Command: "help", Description: "List all commands"},
 	}
+}
+
+// helpText renders the /help reply from the menu list, one command per
+// line. Built from menuCommands so the reply cannot drift from the menu.
+func helpText() string {
+	var b strings.Builder
+	for _, c := range menuCommands() {
+		b.WriteString("/" + c.Command + " - " + c.Description + "\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // publishCommands exposes menuCommands in the Telegram menu. A failed
@@ -181,9 +193,6 @@ func (a *app) ping(ctx context.Context, b *bot.Bot, update *models.Update) {
 	a.sendReply(ctx, b, update.Message.Chat.ID, "pong")
 }
 
-// startMessage is the short welcome reply for /start.
-const startMessage = "Welcome! Send me anything to chat. /new starts a fresh session, /model shows the model, /remember saves a fact."
-
 // unknownCommandReply answers a slash command the bot does not know.
 // It never reaches the agent.
 const unknownCommandReply = "Unknown command"
@@ -211,7 +220,7 @@ func isKnownCommand(text string) bool {
 		return false
 	}
 	switch name {
-	case "start", "ping", "new", "model", "usage", "remember", "forget":
+	case "start", "ping", "new", "model", "usage", "remember", "forget", "help":
 		return true
 	}
 	return false
@@ -261,8 +270,14 @@ func (a *app) forget(ctx context.Context, b *bot.Bot, update *models.Update) {
 	a.sendReply(ctx, b, chatID, "Forgot the matching lines in "+file+".")
 }
 
+// start is an alias of /new: it delegates to fresh so both commands
+// restart the session the same way.
 func (a *app) start(ctx context.Context, b *bot.Bot, update *models.Update) {
-	a.sendReplySilent(ctx, b, update.Message.Chat.ID, startMessage)
+	a.fresh(ctx, b, update)
+}
+
+func (a *app) help(ctx context.Context, b *bot.Bot, update *models.Update) {
+	a.sendReplySilent(ctx, b, update.Message.Chat.ID, helpText())
 }
 
 func (a *app) fresh(ctx context.Context, b *bot.Bot, update *models.Update) {

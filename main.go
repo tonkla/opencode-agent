@@ -49,11 +49,11 @@ func (a *app) requireUser(next bot.HandlerFunc) bot.HandlerFunc {
 	}
 }
 
-// skipsHistory reports a /new or /start invocation, with an optional @bot
-// suffix. Both round trips stay out of history: session mechanics, not
-// conversation.
+// skipsHistory reports a /new, /start, or /help invocation, with an
+// optional @bot suffix. All three round trips stay out of history:
+// session mechanics, not conversation.
 func skipsHistory(text string) bool {
-	return isNewCommand(text) || isStartCommand(text)
+	return isNewCommand(text) || isStartCommand(text) || isHelpCommand(text)
 }
 
 // isNewCommand reports a /new invocation, with an optional @bot suffix.
@@ -65,9 +65,16 @@ func isNewCommand(text string) bool {
 }
 
 // isStartCommand reports a /start invocation, with an optional @bot
-// suffix. The welcome exchange stays out of history like /new does.
+// suffix. /start is an alias of /new and stays out of history like it.
 func isStartCommand(text string) bool {
 	rest, ok := strings.CutPrefix(text, "/start")
+	return ok && (rest == "" || rest[0] == ' ' || rest[0] == '@')
+}
+
+// isHelpCommand reports a /help invocation, with an optional @bot
+// suffix. The listing stays out of history like /start does.
+func isHelpCommand(text string) bool {
+	rest, ok := strings.CutPrefix(text, "/help")
 	return ok && (rest == "" || rest[0] == ' ' || rest[0] == '@')
 }
 
@@ -77,8 +84,8 @@ func (a *app) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text stri
 }
 
 // sendReplySilent delivers one reply without persisting it, for session
-// mechanics like the /new acknowledgement and the /start welcome that
-// are not conversation.
+// mechanics like the /new acknowledgement, the /start welcome, and the
+// /help listing that are not conversation.
 func (a *app) sendReplySilent(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	a.sendChunks(ctx, b, chatID, text)
 }

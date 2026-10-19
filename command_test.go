@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -43,7 +45,7 @@ func TestMemoryTarget(t *testing.T) {
 
 func TestMenuCommands(t *testing.T) {
 	got := menuCommands()
-	want := []string{"start", "ping", "new", "model", "usage", "remember", "forget"}
+	want := []string{"start", "ping", "new", "model", "usage", "remember", "forget", "help"}
 	if len(got) != len(want) {
 		t.Fatalf("menu holds %d commands, want %d", len(got), len(want))
 	}
@@ -90,10 +92,48 @@ func TestPublishCommands(t *testing.T) {
 	if path == "" {
 		t.Fatal("publish must call setMyCommands")
 	}
-	for _, name := range []string{"start", "ping", "new", "model", "usage", "remember", "forget"} {
+	for _, name := range []string{"start", "ping", "new", "model", "usage", "remember", "forget", "help"} {
 		if !strings.Contains(body, `"command":"`+name+`"`) {
 			t.Errorf("menu payload misses %q: %s", name, body)
 		}
+	}
+}
+
+func TestHelpText(t *testing.T) {
+	got := helpText()
+	for _, c := range menuCommands() {
+		if !strings.Contains(got, "/"+c.Command+" - "+c.Description) {
+			t.Errorf("help text misses /%s: %q", c.Command, got)
+		}
+	}
+}
+
+func TestIsHelpCommand(t *testing.T) {
+	for text, want := range map[string]bool{
+		"/help": true, "/help@agentbot": true, "/help me": true,
+		"/helps": false, "/remember x": false, "talk about /help": false,
+		" /help": false, "": false,
+	} {
+		if got := isHelpCommand(text); got != want {
+			t.Errorf("isHelpCommand(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+func TestHelpSkipsHistory(t *testing.T) {
+	var hits atomic.Int64
+	b := testBot(t, &hits)
+	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
+	a := &app{config: Config{AllowedUserID: 7}, history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	update := &models.Update{Message: &models.Message{
+		Text: "/help", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
+	}}
+	a.requireUser(a.help)(context.Background(), b, update)
+	if hits.Load() != 1 {
+		t.Fatalf("help reply must still send, %d sends", hits.Load())
+	}
+	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
+		t.Error("/help round trip must leave no history behind")
 	}
 }
 
@@ -101,7 +141,7 @@ func TestIsUnknownCommand(t *testing.T) {
 	for text, want := range map[string]bool{
 		"/bogus": true, "/bogus args": true, "/bogus@agentbot": true,
 		"/new": false, "/start": false, "/ping": false, "/model": false,
-		"/model list": false, "/usage": false, "/remember x": false, "/forget x": false,
+		"/model list": false, "/usage": false, "/remember x": false, "/forget x": false, "/help": false,
 		"hello": false, "talk about /bogus": false, "/": false, "/ ": false, "": false,
 	} {
 		if got := isUnknownCommand(text); got != want {

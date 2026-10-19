@@ -127,20 +127,50 @@ func TestRequireUserSkipsStart(t *testing.T) {
 	}
 }
 
-func TestStartSkipsHistory(t *testing.T) {
+func TestStartDelegatesToNew(t *testing.T) {
+	var creates atomic.Int64
+	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/session" {
+			creates.Add(1)
+			_, _ = w.Write([]byte(`{"data":{"id":"s1"}}`))
+			return
+		}
+		http.Error(w, "unexpected agent call", http.StatusInternalServerError)
+	}))
+	t.Cleanup(agentSrv.Close)
 	var hits atomic.Int64
 	b := testBot(t, &hits)
-	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
-	a := &app{history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	first := time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC)
+	second := time.Date(2026, 10, 18, 11, 45, 0, 0, time.UTC)
+	clock, _ := testClock(first, first, second, second)
+	a := &app{
+		agent:   NewAgent(AgentOptions{BaseURL: agentSrv.URL, Username: "u", Password: "p", Directory: t.TempDir(), Timeout: 30 * time.Second}),
+		history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()},
+	}
+	a.history.appendUser("before")
 	update := &models.Update{Message: &models.Message{
 		Text: "/start", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
 	}}
 	a.start(context.Background(), b, update)
+	if creates.Load() != 1 {
+		t.Errorf("/start must restart the agent session like /new, %d creates", creates.Load())
+	}
 	if hits.Load() != 1 {
 		t.Fatalf("start reply must still send, %d sends", hits.Load())
 	}
-	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
-		t.Error("/start reply must leave no history behind")
+	raw, err := os.ReadFile(filepath.Join(a.history.baseDir, "history", "20261018", "1130.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "before") {
+		t.Errorf("old history file lost its lines: %q", raw)
+	}
+	if strings.Contains(string(raw), "Fresh session") || strings.Contains(string(raw), "/start") {
+		t.Errorf("/start round trip must leave no history behind: %q", raw)
+	}
+	if !a.history.started.Equal(second) {
+		t.Errorf("/start must reset history like /new, started = %v", a.history.started)
 	}
 }
 
