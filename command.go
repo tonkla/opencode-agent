@@ -46,7 +46,11 @@ func menuCommands() []models.BotCommand {
 func helpText() string {
 	var b strings.Builder
 	for _, c := range menuCommands() {
-		b.WriteString("/" + c.Command + " - " + c.Description + "\n")
+		b.WriteString("/")
+		b.WriteString(c.Command)
+		b.WriteString(" - ")
+		b.WriteString(c.Description)
+		b.WriteByte('\n')
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
