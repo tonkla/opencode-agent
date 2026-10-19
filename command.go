@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,29 @@ func (a *app) registerCommands(b *bot.Bot) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "usage", bot.MatchTypeCommand, a.requireUser(a.usage))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "remember", bot.MatchTypeCommand, a.requireUser(a.remember))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "forget", bot.MatchTypeCommand, a.requireUser(a.forget))
+}
+
+// menuCommands lists every slash command shown in the Telegram menu, one
+// entry per registered handler. Pure so tests pin it.
+func menuCommands() []models.BotCommand {
+	return []models.BotCommand{
+		{Command: "start", Description: "Welcome message"},
+		{Command: "ping", Description: "Check the bot is alive"},
+		{Command: "new", Description: "Start a fresh session"},
+		{Command: "model", Description: "Show or switch the session model"},
+		{Command: "usage", Description: "Show token usage"},
+		{Command: "remember", Description: "Save a fact"},
+		{Command: "forget", Description: "Forget matching lines"},
+	}
+}
+
+// publishCommands exposes menuCommands in the Telegram menu. A failed
+// publish only reaches the process log: the menu is cosmetic and must
+// never keep the bot from starting.
+func (a *app) publishCommands(ctx context.Context, b *bot.Bot) {
+	if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: menuCommands()}); err != nil {
+		log.Printf("telegram menu: %v", err)
+	}
 }
 
 func (a *app) model(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -199,7 +223,7 @@ func (a *app) forget(ctx context.Context, b *bot.Bot, update *models.Update) {
 }
 
 func (a *app) start(ctx context.Context, b *bot.Bot, update *models.Update) {
-	a.sendReply(ctx, b, update.Message.Chat.ID, startMessage)
+	a.sendReplySilent(ctx, b, update.Message.Chat.ID, startMessage)
 }
 
 func (a *app) fresh(ctx context.Context, b *bot.Bot, update *models.Update) {

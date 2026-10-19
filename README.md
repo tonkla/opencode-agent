@@ -11,6 +11,8 @@ Personal Telegram assistant backed by a persistent OpenCode server. One live age
 
 ## Commands
 
+The bot publishes these to the Telegram menu on startup.
+
 - `/start` shows the welcome message.
 - `/ping` answers `pong` without touching the agent.
 - `/new` drops the live session and starts a blank one.
@@ -23,7 +25,7 @@ Personal Telegram assistant backed by a persistent OpenCode server. One live age
 
 Anything else is plain text. The bot sends it to the agent and returns the reply as chat messages. A provider prefix still works and must be Zen. Only OpenCode Zen models are allowed. Names are checked against the server catalog. Unknown models and variants are rejected in chat instead of stalling the session. A `<name>:` prefix on `/remember` and `/forget` picks the file. Use `user:`, `soul:`, `identity:`, or `memory:`. Unknown prefixes and bare text land in `MEMORY.md`.
 
-Memory lives entirely in `agent_workspace_dir`: `MEMORY.md` holds durable facts, `USER.md` holds stable preferences, `SOUL.md` holds personality and tone, `IDENTITY.md` holds the agent name and vibe, and `memory/YYYY-MM-DD.md` holds the daily log with a marker on every `/new`. Fresh sessions inject all four files ahead of the first question. Over-cap files truncate with a marker instead of failing the session. Curated files are capped near 2200/1375 chars, and an over-budget `/remember` fails instead of growing silently. Background on the pattern is in `docs/research/persistent-memory.md`. Chat history lands in `history/YYYYMMDD/HHMM.md`, one file per session from its start time, with every user message and bot reply.
+Memory lives entirely in `agent_workspace_dir`: `MEMORY.md` holds durable facts, `USER.md` holds stable preferences, `SOUL.md` holds personality and tone, `IDENTITY.md` holds the agent name and vibe, and `memory/YYYY-MM-DD.md` holds the daily log with a marker on every `/new`. Fresh sessions inject all four files ahead of the first question. Over-cap files truncate with a marker instead of failing the session. Curated files are capped near 2200/1375 chars, and an over-budget `/remember` fails instead of growing silently. Background on the pattern is in `docs/research/persistent-memory.md`. Chat history lands in `history/YYYYMMDD/HHMM.md`, one file per session from its start time, with every user message and bot reply except `/new` and `/start`.
 
 Only one Telegram user ID gets answers. Everyone else is ignored. The agent works inside one dedicated workspace folder.
 

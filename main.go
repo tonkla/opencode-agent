@@ -42,11 +42,18 @@ func (a *app) requireUser(next bot.HandlerFunc) bot.HandlerFunc {
 		if update.Message == nil || update.Message.From == nil || update.Message.From.ID != a.config.AllowedUserID {
 			return
 		}
-		if !isNewCommand(update.Message.Text) {
+		if !skipsHistory(update.Message.Text) {
 			a.history.appendUser(update.Message.Text)
 		}
 		next(ctx, b, update)
 	}
+}
+
+// skipsHistory reports a /new or /start invocation, with an optional @bot
+// suffix. Both round trips stay out of history: session mechanics, not
+// conversation.
+func skipsHistory(text string) bool {
+	return isNewCommand(text) || isStartCommand(text)
 }
 
 // isNewCommand reports a /new invocation, with an optional @bot suffix.
@@ -57,13 +64,21 @@ func isNewCommand(text string) bool {
 	return ok && (rest == "" || rest[0] == ' ' || rest[0] == '@')
 }
 
+// isStartCommand reports a /start invocation, with an optional @bot
+// suffix. The welcome exchange stays out of history like /new does.
+func isStartCommand(text string) bool {
+	rest, ok := strings.CutPrefix(text, "/start")
+	return ok && (rest == "" || rest[0] == ' ' || rest[0] == '@')
+}
+
 func (a *app) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	a.history.appendAgent(text)
 	a.sendChunks(ctx, b, chatID, text)
 }
 
 // sendReplySilent delivers one reply without persisting it, for session
-// mechanics like the /new acknowledgement that are not conversation.
+// mechanics like the /new acknowledgement and the /start welcome that
+// are not conversation.
 func (a *app) sendReplySilent(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	a.sendChunks(ctx, b, chatID, text)
 }
@@ -194,6 +209,7 @@ func run(ctx context.Context) error {
 	}
 	a := &app{agent: agent, config: cfg, history: newChatHistory(cfg.WorkspaceDir)}
 	a.registerCommands(b)
+	a.publishCommands(ctx, b)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "", bot.MatchTypePrefix, a.requireUser(a.answer))
 	b.Start(ctx)
 	return nil

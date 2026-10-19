@@ -98,6 +98,52 @@ func TestIsNewCommand(t *testing.T) {
 	}
 }
 
+func TestIsStartCommand(t *testing.T) {
+	for text, want := range map[string]bool{
+		"/start": true, "/start@agentbot": true, "/start please": true,
+		"/starts": false, "/remember x": false, "talk about /start": false,
+		" /start": false, "": false,
+	} {
+		if got := isStartCommand(text); got != want {
+			t.Errorf("isStartCommand(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+func TestRequireUserSkipsStart(t *testing.T) {
+	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
+	a := &app{config: Config{AllowedUserID: 7}, history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	called := false
+	next := bot.HandlerFunc(func(context.Context, *bot.Bot, *models.Update) { called = true })
+	update := &models.Update{Message: &models.Message{
+		Text: "/start", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
+	}}
+	a.requireUser(next)(context.Background(), nil, update)
+	if !called {
+		t.Error("guarded handler must still run for /start")
+	}
+	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
+		t.Error("/start must leave no history behind")
+	}
+}
+
+func TestStartSkipsHistory(t *testing.T) {
+	var hits atomic.Int64
+	b := testBot(t, &hits)
+	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
+	a := &app{history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	update := &models.Update{Message: &models.Message{
+		Text: "/start", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
+	}}
+	a.start(context.Background(), b, update)
+	if hits.Load() != 1 {
+		t.Fatalf("start reply must still send, %d sends", hits.Load())
+	}
+	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
+		t.Error("/start reply must leave no history behind")
+	}
+}
+
 func TestRequireUserSkipsNew(t *testing.T) {
 	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
 	a := &app{config: Config{AllowedUserID: 7}, history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
