@@ -121,6 +121,10 @@ func (a *app) keepTyping(ctx context.Context, b *bot.Bot, chatID int64) context.
 
 func (a *app) answer(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
+	if isUnknownCommand(update.Message.Text) {
+		a.sendReply(ctx, b, chatID, unknownCommandReply)
+		return
+	}
 	stop := a.keepTyping(ctx, b, chatID)
 	reply, err := a.agent.Ask(ctx, update.Message.Text)
 	stop()

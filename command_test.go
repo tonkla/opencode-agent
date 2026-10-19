@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 func TestMemoryTarget(t *testing.T) {
@@ -91,5 +94,59 @@ func TestPublishCommands(t *testing.T) {
 		if !strings.Contains(body, `"command":"`+name+`"`) {
 			t.Errorf("menu payload misses %q: %s", name, body)
 		}
+	}
+}
+
+func TestIsUnknownCommand(t *testing.T) {
+	for text, want := range map[string]bool{
+		"/bogus": true, "/bogus args": true, "/bogus@agentbot": true,
+		"/new": false, "/start": false, "/ping": false, "/model": false,
+		"/model list": false, "/usage": false, "/remember x": false, "/forget x": false,
+		"hello": false, "talk about /bogus": false, "/": false, "/ ": false, "": false,
+	} {
+		if got := isUnknownCommand(text); got != want {
+			t.Errorf("isUnknownCommand(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+func TestAnswerBlocksUnknownCommand(t *testing.T) {
+	var agentHits atomic.Int64
+	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agentHits.Add(1)
+		http.Error(w, "must not reach the agent", http.StatusInternalServerError)
+	}))
+	t.Cleanup(agentSrv.Close)
+	var reply string
+	botSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "sendMessage") {
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Errorf("bad sendMessage form: %v", err)
+			}
+			reply = r.FormValue("text")
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1,"chat":{"id":1,"type":"private"},"date":1,"text":"x"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"t"}}`))
+	}))
+	t.Cleanup(botSrv.Close)
+	b, err := bot.New("test-token", bot.WithServerURL(botSrv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{
+		agent:   NewAgent(AgentOptions{BaseURL: agentSrv.URL, Username: "u", Password: "p", Directory: t.TempDir(), Timeout: time.Second}),
+		history: newChatHistory(t.TempDir()),
+	}
+	update := &models.Update{Message: &models.Message{
+		Text: "/bogus", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
+	}}
+	a.answer(context.Background(), b, update)
+	if agentHits.Load() != 0 {
+		t.Errorf("unknown command reached the agent %d times", agentHits.Load())
+	}
+	if reply != unknownCommandReply {
+		t.Errorf("reply = %q, want %q", reply, unknownCommandReply)
 	}
 }

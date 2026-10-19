@@ -184,6 +184,45 @@ func (a *app) ping(ctx context.Context, b *bot.Bot, update *models.Update) {
 // startMessage is the short welcome reply for /start.
 const startMessage = "Welcome! Send me anything to chat. /new starts a fresh session, /model shows the model, /remember saves a fact."
 
+// unknownCommandReply answers a slash command the bot does not know.
+// It never reaches the agent.
+const unknownCommandReply = "Unknown command"
+
+// commandName extracts the slash command from text, dropping arguments
+// and an optional @bot suffix. It reports false when text holds no
+// command, so bare "/" and "/ ..." stay plain text for the agent.
+func commandName(text string) (string, bool) {
+	rest, ok := strings.CutPrefix(text, "/")
+	if !ok {
+		return "", false
+	}
+	name, _, _ := strings.Cut(rest, " ")
+	name, _, _ = strings.Cut(name, "@")
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+// isKnownCommand reports whether text invokes a handled slash command.
+func isKnownCommand(text string) bool {
+	name, ok := commandName(text)
+	if !ok {
+		return false
+	}
+	switch name {
+	case "start", "ping", "new", "model", "usage", "remember", "forget":
+		return true
+	}
+	return false
+}
+
+// isUnknownCommand reports a slash command the bot does not handle.
+func isUnknownCommand(text string) bool {
+	_, ok := commandName(text)
+	return ok && !isKnownCommand(text)
+}
+
 // memoryTarget splits the optional "<name>:" prefix off a /remember or
 // /forget argument. Bare text and unknown prefixes target MEMORY.md.
 func memoryTarget(arg string) (file, rest string) {
