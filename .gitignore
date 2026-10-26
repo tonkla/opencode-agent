@@ -3,3 +3,5 @@ node_modules/
 config.toml
 .DS_Store
 *.plist
+
+opencode-agent

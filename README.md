@@ -39,7 +39,7 @@ Only one Telegram user ID gets answers. Everyone else is ignored. The agent work
 1. Talk to BotFather on Telegram and create a bot. Keep the token.
 2. Find your Telegram user ID. Message `@userinfobot` and copy the number.
 3. Copy `config.toml.example` to `config.toml` and fill in the values.
-4. Run `go mod download && go build -o opencode-agent .`.
+4. Run `go mod download && go build -o opencode-agent .` . For Intel macOS: `GOOS=darwin GOARCH=amd64 go build`.
 5. Run `./opencode-agent` (`-config` points elsewhere when needed). The bot starts its own `opencode serve` and needs no separate server step.
 
 Keys: `telegram_bot_token`, `telegram_allowed_user_id`, `agent_workspace_dir`, `model` (required, Zen only, for example `deepseek-v4.1-flash-free`). Optional: `agent_timeout_ms` (default `300000`), `model_variant` (default thinking effort, for example `high`).
