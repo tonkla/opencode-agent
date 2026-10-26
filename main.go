@@ -149,7 +149,22 @@ func isHelpCommand(text string) bool {
 	return ok && (rest == "" || rest[0] == ' ' || rest[0] == '@')
 }
 
+// scrubPaths redacts server-side filesystem paths from chat-bound
+// text. Tool results surface absolute paths and the model echoes them,
+// so redact at the send boundary instead of trusting the model to omit
+// them. Pure over its inputs so tests pin it without a server.
+func scrubPaths(baseDir, dir, text string) string {
+	if dir != "" && dir != baseDir {
+		text = strings.ReplaceAll(text, dir, "~")
+	}
+	if baseDir != "" {
+		text = strings.ReplaceAll(text, baseDir, "~")
+	}
+	return text
+}
+
 func (a *app) sendReply(ctx context.Context, b *bot.Bot, chatID, userID int64, text string) {
+	text = scrubPaths(a.baseDir, userDir(a.baseDir, userID), text)
 	if sess, err := a.sessionFor(userID); err == nil {
 		sess.history.appendAgent(text)
 	} else {

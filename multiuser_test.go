@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +92,61 @@ func TestRequireUserRejectsOutsider(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(a.baseDir, "999")); !os.IsNotExist(err) {
 		t.Error("outsider must not get a workspace dir")
+	}
+}
+
+func TestScrubPaths(t *testing.T) {
+	base := filepath.Join(string(filepath.Separator), "srv", "ws")
+	dir := filepath.Join(base, "123")
+	if got := scrubPaths(base, dir, "saved to "+dir+"/MEMORY.md"); got != "saved to ~/MEMORY.md" {
+		t.Errorf("user dir must scrub to ~, got %q", got)
+	}
+	if got := scrubPaths(base, dir, "root "+base+" holds all users"); got != "root ~ holds all users" {
+		t.Errorf("base dir must scrub to ~, got %q", got)
+	}
+	if got := scrubPaths(base, dir, "no paths here"); got != "no paths here" {
+		t.Errorf("clean text must pass through, got %q", got)
+	}
+	if got := scrubPaths("", "", "keep /etc/hosts"); got != "keep /etc/hosts" {
+		t.Errorf("empty dirs must not scrub, got %q", got)
+	}
+}
+
+func TestSendReplyScrubsWorkspacePath(t *testing.T) {
+	var replies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "sendMessage") {
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Errorf("bad sendMessage form: %v", err)
+			}
+			replies = append(replies, r.FormValue("text"))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1,"chat":{"id":1,"type":"private"},"date":1,"text":"x"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"t"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	b, err := bot.New("test-token", bot.WithServerURL(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := testApp(t, 7)
+	dir := userDir(a.baseDir, 7)
+	a.sendReply(context.Background(), b, 7, 7, "saved to "+dir+"/MEMORY.md")
+	if len(replies) != 1 {
+		t.Fatalf("%d sends, want 1", len(replies))
+	}
+	if strings.Contains(replies[0], a.baseDir) {
+		t.Errorf("reply leaks workspace path: %q", replies[0])
+	}
+	sess, _ := a.sessionFor(7)
+	raw, err := os.ReadFile(filepath.Join(sess.history.baseDir, "history", sess.history.started.Format("20060102"), sess.history.started.Format("1504")+".md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), a.baseDir) {
+		t.Errorf("history leaks workspace path: %q", raw)
 	}
 }
 
