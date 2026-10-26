@@ -124,7 +124,7 @@ func TestHelpSkipsHistory(t *testing.T) {
 	var hits atomic.Int64
 	b := testBot(t, &hits)
 	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
-	a := &app{config: Config{AllowedUserID: 7}, history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	a := testAppWithClock(t, clock, 7)
 	update := &models.Update{Message: &models.Message{
 		Text: "/help", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
 	}}
@@ -132,7 +132,7 @@ func TestHelpSkipsHistory(t *testing.T) {
 	if hits.Load() != 1 {
 		t.Fatalf("help reply must still send, %d sends", hits.Load())
 	}
-	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(userHistoryBase(a, 7), "history")); !os.IsNotExist(err) {
 		t.Error("/help round trip must leave no history behind")
 	}
 }
@@ -175,10 +175,15 @@ func TestAnswerBlocksUnknownCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &app{
-		agent:   NewAgent(AgentOptions{BaseURL: agentSrv.URL, Username: "u", Password: "p", Directory: t.TempDir(), Timeout: time.Second}),
-		history: newChatHistory(t.TempDir()),
+	a := testApp(t, 7)
+	a.baseURL = agentSrv.URL
+	a.password = "p"
+	a.timeout = time.Second
+	sess, err := a.sessionFor(7)
+	if err != nil {
+		t.Fatal(err)
 	}
+	sess.agent = NewAgent(AgentOptions{BaseURL: agentSrv.URL, Username: "u", Password: "p", Directory: sess.agent.directory, Timeout: time.Second})
 	update := &models.Update{Message: &models.Message{
 		Text: "/bogus", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
 	}}

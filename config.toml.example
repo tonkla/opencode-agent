@@ -1,10 +1,13 @@
 # Copy to config.toml and fill in the values. Only telegram_bot_token,
-# telegram_allowed_user_id, agent_workspace_dir, and model are required.
+# telegram_allowed_user_ids, agent_workspace_dir, and model are required.
+# Each allowed user gets an isolated workspace under
+# agent_workspace_dir/<user_id> with its own *.md files, history/, and
+# memory/ plus its own OpenCode session.
 # The rest have defaults. The opencode server is managed internally: the
 # binary starts it on a loopback port with a generated password, so no
 # serve credentials live here.
 telegram_bot_token = "123456:replace-me"
-telegram_allowed_user_id = 123456789
+telegram_allowed_user_ids = [123456789]
 agent_workspace_dir = "/Users/YOU/agent-workspace"
 
 # Optional. Defaults shown.

@@ -10,12 +10,12 @@ import (
 // Config is the bot's entire configuration. It lives in config.toml so one
 // file holds every value launchd and terminals would otherwise inject.
 type Config struct {
-	BotToken       string `toml:"telegram_bot_token"`
-	AllowedUserID  int64  `toml:"telegram_allowed_user_id"`
-	WorkspaceDir   string `toml:"agent_workspace_dir"`
-	AgentTimeoutMs int    `toml:"agent_timeout_ms"`
-	Model          string `toml:"model"`
-	ModelVariant   string `toml:"model_variant"`
+	BotToken       string  `toml:"telegram_bot_token"`
+	AllowedUserIDs []int64 `toml:"telegram_allowed_user_ids"`
+	WorkspaceDir   string  `toml:"agent_workspace_dir"`
+	AgentTimeoutMs int     `toml:"agent_timeout_ms"`
+	Model          string  `toml:"model"`
+	ModelVariant   string  `toml:"model_variant"`
 }
 
 // LoadConfig reads path once at startup and fails fast on bad values. It
@@ -38,8 +38,8 @@ func LoadConfig(path string) (Config, error) {
 	if cfg.BotToken == "" {
 		missing = append(missing, "telegram_bot_token")
 	}
-	if cfg.AllowedUserID == 0 {
-		missing = append(missing, "telegram_allowed_user_id")
+	if len(cfg.AllowedUserIDs) == 0 {
+		missing = append(missing, "telegram_allowed_user_ids")
 	}
 	if cfg.WorkspaceDir == "" {
 		missing = append(missing, "agent_workspace_dir")

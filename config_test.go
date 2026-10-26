@@ -28,7 +28,7 @@ func TestLoadConfigMissingNamesAll(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	for _, want := range []string{"telegram_bot_token", "telegram_allowed_user_id", "agent_workspace_dir"} {
+	for _, want := range []string{"telegram_bot_token", "telegram_allowed_user_ids", "agent_workspace_dir"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
@@ -43,7 +43,7 @@ func TestLoadConfigPartialNamesRest(t *testing.T) {
 	if strings.Contains(err.Error(), "telegram_bot_token") {
 		t.Errorf("present key must not be listed: %q", err)
 	}
-	for _, want := range []string{"telegram_allowed_user_id", "agent_workspace_dir"} {
+	for _, want := range []string{"telegram_allowed_user_ids", "agent_workspace_dir"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
@@ -51,17 +51,25 @@ func TestLoadConfigPartialNamesRest(t *testing.T) {
 }
 
 func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
-	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nagent_workspace_dir = \"/tmp/ws\"\nbot_tokken = \"typo\"\n"
+	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_ids = [42]\nagent_workspace_dir = \"/tmp/ws\"\nbot_tokken = \"typo\"\n"
 	_, err := LoadConfig(writeTOML(t, body))
 	if err == nil || !strings.Contains(err.Error(), "bot_tokken") {
 		t.Errorf("expected unknown-key error, got %v", err)
 	}
 }
 
+func TestLoadConfigRejectsSingularAllowlistKey(t *testing.T) {
+	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nagent_workspace_dir = \"/tmp/ws\"\nmodel = \"m\"\n"
+	_, err := LoadConfig(writeTOML(t, body))
+	if err == nil || !strings.Contains(err.Error(), "telegram_allowed_user_id") {
+		t.Errorf("singular key must be rejected as unknown, got %v", err)
+	}
+}
+
 // The serve is managed internally now, so the old serve keys are unknown and
 // the error names them for easy cleanup.
 func TestLoadConfigRejectsRemovedServeKeys(t *testing.T) {
-	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nagent_workspace_dir = \"/tmp/ws\"\nmodel = \"m\"\nopencode_password = \"pw\"\nopencode_base_url = \"http://127.0.0.1:4096\"\nopencode_server_user = \"opencode\"\n"
+	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_ids = [42]\nagent_workspace_dir = \"/tmp/ws\"\nmodel = \"m\"\nopencode_password = \"pw\"\nopencode_base_url = \"http://127.0.0.1:4096\"\nopencode_server_user = \"opencode\"\n"
 	_, err := LoadConfig(writeTOML(t, body))
 	if err == nil {
 		t.Fatal("expected unknown-key error")
@@ -74,7 +82,7 @@ func TestLoadConfigRejectsRemovedServeKeys(t *testing.T) {
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
-	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nagent_workspace_dir = \"/tmp/ws\"\nmodel = \"opencode/deepseek-v4.1-flash-free\"\n"
+	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_ids = [42, 456]\nagent_workspace_dir = \"/tmp/ws\"\nmodel = \"opencode/deepseek-v4.1-flash-free\"\n"
 	cfg, err := LoadConfig(writeTOML(t, body))
 	if err != nil {
 		t.Fatal(err)
@@ -82,17 +90,20 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.AgentTimeoutMs != 300000 {
 		t.Errorf("bad defaults: %+v", cfg)
 	}
+	if len(cfg.AllowedUserIDs) != 2 || cfg.AllowedUserIDs[0] != 42 || cfg.AllowedUserIDs[1] != 456 {
+		t.Errorf("allowlist lost: %+v", cfg.AllowedUserIDs)
+	}
 }
 
 func TestLoadConfigRejectsBadTimeout(t *testing.T) {
-	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nagent_workspace_dir = \"/tmp/ws\"\nagent_timeout_ms = -5\nmodel = \"opencode/deepseek-v4.1-flash-free\"\n"
+	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_ids = [42]\nagent_workspace_dir = \"/tmp/ws\"\nagent_timeout_ms = -5\nmodel = \"opencode/deepseek-v4.1-flash-free\"\n"
 	if _, err := LoadConfig(writeTOML(t, body)); err == nil {
 		t.Error("expected timeout error")
 	}
 }
 
 func TestLoadConfigRequiresModel(t *testing.T) {
-	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_id = 42\nagent_workspace_dir = \"/tmp/ws\"\n"
+	body := "telegram_bot_token = \"tok\"\ntelegram_allowed_user_ids = [42]\nagent_workspace_dir = \"/tmp/ws\"\n"
 	_, err := LoadConfig(writeTOML(t, body))
 	if err == nil || !strings.Contains(err.Error(), "Zen") {
 		t.Errorf("expected Zen-only error, got %v", err)

@@ -1,6 +1,6 @@
 # OpenCode Agent
 
-Personal Telegram assistant backed by a persistent OpenCode server. One live agent session. Plain text goes to it. Written in Go as a single static binary.
+Personal Telegram assistant backed by a persistent OpenCode server. One live agent session per allowed user. Plain text goes to it. Written in Go as a single static binary.
 
 ## Prerequisites
 
@@ -26,13 +26,13 @@ The bot publishes these to the Telegram menu on startup.
 
 Any other `/...` command gets `Unknown command` and never reaches the agent. Anything else is plain text. The bot sends it to the agent and returns the reply as chat messages. A provider prefix still works and must be Zen. Only OpenCode Zen models are allowed. Names are checked against the server catalog. Unknown models and variants are rejected in chat instead of stalling the session. A `<name>:` prefix on `/remember` and `/forget` picks the file. Use `user:`, `soul:`, `identity:`, or `memory:`. Unknown prefixes and bare text land in `MEMORY.md`.
 
-Memory lives entirely in `agent_workspace_dir`: `MEMORY.md` holds durable facts, `USER.md` holds stable preferences, `SOUL.md` holds personality and tone, `IDENTITY.md` holds the agent name and vibe, and `memory/YYYY-MM-DD.md` holds the daily log with a marker on every `/new`. Fresh sessions inject all four files ahead of the first question. Over-cap files truncate with a marker instead of failing the session. Curated files are capped near 2200/1375 chars, and an over-budget `/remember` fails instead of growing silently. Background on the pattern is in `docs/research/persistent-memory.md`. Chat history lands in `history/YYYYMMDD/HHMM.md`, one file per session from its start time, with every user message and bot reply except `/new`, `/start`, and `/help`.
+Memory lives entirely in `agent_workspace_dir/<user_id>` per user: `MEMORY.md` holds durable facts, `USER.md` holds stable preferences, `SOUL.md` holds personality and tone, `IDENTITY.md` holds the agent name and vibe, and `memory/YYYY-MM-DD.md` holds the daily log with a marker on every `/new`. Fresh sessions inject all four files ahead of the first question. Over-cap files truncate with a marker instead of failing the session. Curated files are capped near 2200/1375 chars, and an over-budget `/remember` fails instead of growing silently. Background on the pattern is in `docs/research/persistent-memory.md`. Chat history lands in `history/YYYYMMDD/HHMM.md`, one file per session from its start time, with every user message and bot reply except `/new`, `/start`, and `/help`.
 
-Only one Telegram user ID gets answers. Everyone else is ignored. The agent works inside one dedicated workspace folder.
+Only Telegram user IDs in `telegram_allowed_user_ids` get answers. Everyone else is ignored. Each user works inside its own `agent_workspace_dir/<user_id>` folder with its own OpenCode session, memory files, and chat history.
 
 ## How it works
 
-`main.go` runs the Telegram bot with long polling. `serve.go` starts a private `opencode serve` child on a loopback port with a generated password, waits until it answers, and restarts it when it dies. `agent.go` holds the one live OpenCode session and talks to that child over HTTP with basic auth. `config.go` reads `config.toml` once at startup and fails fast on bad values. Unknown keys are rejected so typos never silently become defaults.
+`main.go` runs the Telegram bot with long polling. `serve.go` starts a private `opencode serve` child on a loopback port with a generated password, waits until it answers, and restarts it when it dies. `agent.go` holds one live OpenCode session per user and talks to that child over HTTP with basic auth. `config.go` reads `config.toml` once at startup and fails fast on bad values. Unknown keys are rejected so typos never silently become defaults.
 
 ## Setup on the Mac mini
 
@@ -42,7 +42,7 @@ Only one Telegram user ID gets answers. Everyone else is ignored. The agent work
 4. Run `go mod download && go build -o opencode-agent .` . For Intel macOS: `GOOS=darwin GOARCH=amd64 go build`.
 5. Run `./opencode-agent` (`-config` points elsewhere when needed). The bot starts its own `opencode serve` and needs no separate server step.
 
-Keys: `telegram_bot_token`, `telegram_allowed_user_id`, `agent_workspace_dir`, `model` (required, Zen only, for example `deepseek-v4.1-flash-free`). Optional: `agent_timeout_ms` (default `300000`), `model_variant` (default thinking effort, for example `high`).
+Keys: `telegram_bot_token`, `telegram_allowed_user_ids` (for example `[123, 456]`), `agent_workspace_dir`, `model` (required, Zen only, for example `deepseek-v4.1-flash-free`). Optional: `agent_timeout_ms` (default `300000`), `model_variant` (default thinking effort, for example `high`).
 
 Checks: `gofmt -l *.go` must print nothing, `go vet .` must pass, `go test .` runs the unit pin. `go test -run 'TestSupervisor|TestAgentLive' .` boots a supervisor-managed server per test and replays the agent loop against it. Only `TestAgentLiveModel` needs one env var: `OPENCODE_TEST_MODEL` in provider/model#variant form.
 

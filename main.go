@@ -4,10 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,19 +34,87 @@ func splitMessage(text string) []string {
 	return out
 }
 
-type app struct {
+// userSession is one Telegram user's isolated state: its own OpenCode
+// session via its own Agent, its own history file, and its own workspace
+// directory holding every *.md, history/, and memory/ artifact.
+type userSession struct {
 	agent   *Agent
-	config  Config
 	history *chatHistory
+}
+
+type app struct {
+	config       Config
+	baseDir      string
+	baseURL      string
+	password     string
+	timeout      time.Duration
+	defaultModel *ModelRef
+
+	mu       sync.Mutex
+	sessions map[int64]*userSession
+}
+
+// isAllowed reports whether id is in the allowlist.
+func (a *app) isAllowed(id int64) bool {
+	for _, want := range a.config.AllowedUserIDs {
+		if id == want {
+			return true
+		}
+	}
+	return false
+}
+
+// userDir resolves one user's workspace: baseDir/<user_id>.
+func userDir(base string, userID int64) string {
+	return filepath.Join(base, strconv.FormatInt(userID, 10))
+}
+
+// sessionFor returns the live session for userID, creating its workspace
+// directory, Agent, and history on first use.
+func (a *app) sessionFor(userID int64) (*userSession, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if s, ok := a.sessions[userID]; ok {
+		return s, nil
+	}
+	dir := userDir(a.baseDir, userID)
+	if err := ensureWorkspaceDir(dir); err != nil {
+		return nil, err
+	}
+	opts := AgentOptions{
+		BaseURL:   a.baseURL,
+		Username:  serveUsername,
+		Password:  a.password,
+		Directory: dir,
+		Timeout:   a.timeout,
+	}
+	if a.defaultModel != nil {
+		opts.Model = *a.defaultModel
+		opts.HasModel = true
+	}
+	s := &userSession{
+		agent:   NewAgent(opts),
+		history: newChatHistory(dir),
+	}
+	if a.sessions == nil {
+		a.sessions = map[int64]*userSession{}
+	}
+	a.sessions[userID] = s
+	return s, nil
 }
 
 func (a *app) requireUser(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message == nil || update.Message.From == nil || update.Message.From.ID != a.config.AllowedUserID {
+		if update.Message == nil || update.Message.From == nil || !a.isAllowed(update.Message.From.ID) {
+			return
+		}
+		sess, err := a.sessionFor(update.Message.From.ID)
+		if err != nil {
+			log.Printf("user %d workspace: %v", update.Message.From.ID, err)
 			return
 		}
 		if !skipsHistory(update.Message.Text) {
-			a.history.appendUser(update.Message.Text)
+			sess.history.appendUser(update.Message.Text)
 		}
 		next(ctx, b, update)
 	}
@@ -78,8 +149,12 @@ func isHelpCommand(text string) bool {
 	return ok && (rest == "" || rest[0] == ' ' || rest[0] == '@')
 }
 
-func (a *app) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text string) {
-	a.history.appendAgent(text)
+func (a *app) sendReply(ctx context.Context, b *bot.Bot, chatID, userID int64, text string) {
+	if sess, err := a.sessionFor(userID); err == nil {
+		sess.history.appendAgent(text)
+	} else {
+		log.Printf("user %d history: %v", userID, err)
+	}
 	a.sendChunks(ctx, b, chatID, text)
 }
 
@@ -128,18 +203,24 @@ func (a *app) keepTyping(ctx context.Context, b *bot.Bot, chatID int64) context.
 
 func (a *app) answer(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
+	userID := update.Message.From.ID
 	if isUnknownCommand(update.Message.Text) {
-		a.sendReply(ctx, b, chatID, unknownCommandReply)
+		a.sendReply(ctx, b, chatID, userID, unknownCommandReply)
+		return
+	}
+	sess, err := a.sessionFor(userID)
+	if err != nil {
+		a.sendReply(ctx, b, chatID, userID, "Could not open your workspace; try again in a moment.")
 		return
 	}
 	stop := a.keepTyping(ctx, b, chatID)
-	reply, err := a.agent.Ask(ctx, update.Message.Text)
+	reply, err := sess.agent.Ask(ctx, update.Message.Text)
 	stop()
 	if err != nil {
-		a.sendReply(ctx, b, chatID, "The agent request failed. The local server may be restarting; try again in a moment.")
+		a.sendReply(ctx, b, chatID, userID, "The agent request failed. The local server may be restarting; try again in a moment.")
 		return
 	}
-	a.sendReply(ctx, b, chatID, reply)
+	a.sendReply(ctx, b, chatID, userID, reply)
 }
 
 // ensureWorkspaceDir creates dir and verifies the agent can write to it.
@@ -189,7 +270,7 @@ func run(ctx context.Context) error {
 	}
 	defer sup.Shutdown()
 
-	agent := NewAgent(AgentOptions{
+	probe := NewAgent(AgentOptions{
 		BaseURL:   sup.BaseURL(),
 		Username:  serveUsername,
 		Password:  sup.Password(),
@@ -202,13 +283,13 @@ func run(ctx context.Context) error {
 	}
 	ref, err := ParseModelRef(text)
 	if err != nil {
-		return fmt.Errorf("bad model in config.toml: %w%s", err, suggestSuffix(ctx, agent, text))
+		return fmt.Errorf("bad model in config.toml: %w%s", err, suggestSuffix(ctx, probe, text))
 	}
-	agent.defaultModel = &ref
-	if err := agent.Reset(ctx); err != nil {
+	probe.defaultModel = &ref
+	if err := probe.Reset(ctx); err != nil {
 		return fmt.Errorf("local opencode server is not responding: %w", err)
 	}
-	if err := agent.ValidateModel(ctx, *agent.defaultModel); err != nil {
+	if err := probe.ValidateModel(ctx, ref); err != nil {
 		return fmt.Errorf("bad default model in config.toml: %w", err)
 	}
 
@@ -218,7 +299,20 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	a := &app{agent: agent, config: cfg, history: newChatHistory(cfg.WorkspaceDir)}
+	a := &app{
+		config:       cfg,
+		baseDir:      cfg.WorkspaceDir,
+		baseURL:      sup.BaseURL(),
+		password:     sup.Password(),
+		timeout:      time.Duration(cfg.AgentTimeoutMs) * time.Millisecond,
+		defaultModel: &ref,
+		sessions:     map[int64]*userSession{},
+	}
+	for _, id := range cfg.AllowedUserIDs {
+		if _, err := a.sessionFor(id); err != nil {
+			return fmt.Errorf("user %d workspace: %w", id, err)
+		}
+	}
 	a.registerCommands(b)
 	a.publishCommands(ctx, b)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "", bot.MatchTypePrefix, a.requireUser(a.answer))

@@ -110,9 +110,36 @@ func TestIsStartCommand(t *testing.T) {
 	}
 }
 
+func testApp(t *testing.T, ids ...int64) *app {
+	t.Helper()
+	return &app{config: Config{AllowedUserIDs: ids}, baseDir: t.TempDir(), sessions: map[int64]*userSession{}}
+}
+
+func testAppWithClock(t *testing.T, clock func() time.Time, ids ...int64) *app {
+	t.Helper()
+	a := testApp(t, ids...)
+	for _, id := range ids {
+		sess, err := a.sessionFor(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sess.history.clock = clock
+		sess.history.started = clock()
+	}
+	return a
+}
+
+func userHistoryBase(a *app, userID int64) string {
+	sess, err := a.sessionFor(userID)
+	if err != nil {
+		return ""
+	}
+	return sess.history.baseDir
+}
+
 func TestRequireUserSkipsStart(t *testing.T) {
 	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
-	a := &app{config: Config{AllowedUserID: 7}, history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	a := testAppWithClock(t, clock, 7)
 	called := false
 	next := bot.HandlerFunc(func(context.Context, *bot.Bot, *models.Update) { called = true })
 	update := &models.Update{Message: &models.Message{
@@ -122,7 +149,7 @@ func TestRequireUserSkipsStart(t *testing.T) {
 	if !called {
 		t.Error("guarded handler must still run for /start")
 	}
-	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(userHistoryBase(a, 7), "history")); !os.IsNotExist(err) {
 		t.Error("/start must leave no history behind")
 	}
 }
@@ -144,11 +171,17 @@ func TestStartDelegatesToNew(t *testing.T) {
 	first := time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC)
 	second := time.Date(2026, 10, 18, 11, 45, 0, 0, time.UTC)
 	clock, _ := testClock(first, first, second, second)
-	a := &app{
-		agent:   NewAgent(AgentOptions{BaseURL: agentSrv.URL, Username: "u", Password: "p", Directory: t.TempDir(), Timeout: 30 * time.Second}),
-		history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()},
+	a := testApp(t, 7)
+	a.baseURL = agentSrv.URL
+	a.password = "p"
+	a.timeout = 30 * time.Second
+	sess, err := a.sessionFor(7)
+	if err != nil {
+		t.Fatal(err)
 	}
-	a.history.appendUser("before")
+	sess.history.clock = clock
+	sess.history.started = clock()
+	sess.history.appendUser("before")
 	update := &models.Update{Message: &models.Message{
 		Text: "/start", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
 	}}
@@ -159,7 +192,11 @@ func TestStartDelegatesToNew(t *testing.T) {
 	if hits.Load() != 1 {
 		t.Fatalf("start reply must still send, %d sends", hits.Load())
 	}
-	raw, err := os.ReadFile(filepath.Join(a.history.baseDir, "history", "20261018", "1130.md"))
+	sess2, err := a.sessionFor(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(sess2.history.baseDir, "history", "20261018", "1130.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,14 +206,14 @@ func TestStartDelegatesToNew(t *testing.T) {
 	if strings.Contains(string(raw), "Fresh session") || strings.Contains(string(raw), "/start") {
 		t.Errorf("/start round trip must leave no history behind: %q", raw)
 	}
-	if !a.history.started.Equal(second) {
-		t.Errorf("/start must reset history like /new, started = %v", a.history.started)
+	if !sess2.history.started.Equal(second) {
+		t.Errorf("/start must reset history like /new, started = %v", sess2.history.started)
 	}
 }
 
 func TestRequireUserSkipsNew(t *testing.T) {
 	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
-	a := &app{config: Config{AllowedUserID: 7}, history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	a := testAppWithClock(t, clock, 7)
 	called := false
 	next := bot.HandlerFunc(func(context.Context, *bot.Bot, *models.Update) { called = true })
 	update := &models.Update{Message: &models.Message{
@@ -186,12 +223,12 @@ func TestRequireUserSkipsNew(t *testing.T) {
 	if !called {
 		t.Error("guarded handler must still run for /new")
 	}
-	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(userHistoryBase(a, 7), "history")); !os.IsNotExist(err) {
 		t.Error("/new must leave no history behind")
 	}
 	update.Message.Text = "hello"
 	a.requireUser(next)(context.Background(), nil, update)
-	raw, err := os.ReadFile(filepath.Join(a.history.baseDir, "history", "20261018", "1130.md"))
+	raw, err := os.ReadFile(filepath.Join(userHistoryBase(a, 7), "history", "20261018", "1130.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,16 +260,16 @@ func TestSendReplySilentSkipsHistory(t *testing.T) {
 	var hits atomic.Int64
 	b := testBot(t, &hits)
 	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
-	a := &app{history: &chatHistory{baseDir: t.TempDir(), clock: clock, started: clock()}}
+	a := testAppWithClock(t, clock, 7)
 	a.sendReplySilent(context.Background(), b, 1, "Fresh session started.")
 	if hits.Load() != 1 {
 		t.Fatalf("silent reply must still send, %d sends", hits.Load())
 	}
-	if _, err := os.Stat(filepath.Join(a.history.baseDir, "history")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(userHistoryBase(a, 7), "history")); !os.IsNotExist(err) {
 		t.Error("silent reply must leave no history behind")
 	}
-	a.sendReply(context.Background(), b, 1, "logged")
-	raw, err := os.ReadFile(filepath.Join(a.history.baseDir, "history", "20261018", "1130.md"))
+	a.sendReply(context.Background(), b, 1, 7, "logged")
+	raw, err := os.ReadFile(filepath.Join(userHistoryBase(a, 7), "history", "20261018", "1130.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

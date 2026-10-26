@@ -66,39 +66,45 @@ func (a *app) publishCommands(ctx context.Context, b *bot.Bot) {
 
 func (a *app) model(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
+	userID := update.Message.From.ID
+	sess, err := a.sessionFor(userID)
+	if err != nil {
+		a.sendReply(ctx, b, chatID, userID, "Could not open your workspace; try again in a moment.")
+		return
+	}
 	arg := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/model"))
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
-		current, err := a.agent.CurrentModel(ctx)
+		current, err := sess.agent.CurrentModel(ctx)
 		if err != nil {
-			a.sendReply(ctx, b, chatID, "Could not read the session model. The local server may be restarting; try again in a moment.")
+			a.sendReply(ctx, b, chatID, userID, "Could not read the session model. The local server may be restarting; try again in a moment.")
 			return
 		}
-		a.sendReply(ctx, b, chatID, describeModel(current))
+		a.sendReply(ctx, b, chatID, userID, describeModel(current))
 		return
 	}
 	if arg == "list" {
-		catalog, err := a.agent.Catalog(ctx)
+		catalog, err := sess.agent.Catalog(ctx)
 		if err != nil {
-			a.sendReply(ctx, b, chatID, "Could not read the model catalog. The local server may be restarting; try again in a moment.")
+			a.sendReply(ctx, b, chatID, userID, "Could not read the model catalog. The local server may be restarting; try again in a moment.")
 			return
 		}
-		a.sendReply(ctx, b, chatID, formatCatalog(catalog))
+		a.sendReply(ctx, b, chatID, userID, formatCatalog(catalog))
 		return
 	}
 	ref, err := ParseModelRef(arg)
 	if err != nil {
-		a.sendReply(ctx, b, chatID, err.Error()+suggestSuffix(ctx, a.agent, arg))
+		a.sendReply(ctx, b, chatID, userID, err.Error()+suggestSuffix(ctx, sess.agent, arg))
 		return
 	}
 	stop := a.keepTyping(ctx, b, chatID)
-	err = a.agent.SetModel(ctx, ref)
+	err = sess.agent.SetModel(ctx, ref)
 	stop()
 	if err != nil {
-		a.sendReply(ctx, b, chatID, "Could not switch model: "+err.Error())
+		a.sendReply(ctx, b, chatID, userID, "Could not switch model: "+err.Error())
 		return
 	}
-	a.sendReply(ctx, b, chatID, "Model set to "+ref.String()+" for this session.")
+	a.sendReply(ctx, b, chatID, userID, "Model set to "+ref.String()+" for this session.")
 }
 
 // formatCatalog lists selectable Zen models with their variants, one per
@@ -143,12 +149,18 @@ func describeModel(m sessionModel) string {
 }
 
 func (a *app) usage(ctx context.Context, b *bot.Bot, update *models.Update) {
-	u, err := a.agent.Usage(ctx)
+	userID := update.Message.From.ID
+	sess, err := a.sessionFor(userID)
 	if err != nil {
-		a.sendReply(ctx, b, update.Message.Chat.ID, "Could not read session usage. The local server may be restarting; try again in a moment.")
+		a.sendReply(ctx, b, update.Message.Chat.ID, userID, "Could not open your workspace; try again in a moment.")
 		return
 	}
-	a.sendReply(ctx, b, update.Message.Chat.ID, formatUsage(u))
+	u, err := sess.agent.Usage(ctx)
+	if err != nil {
+		a.sendReply(ctx, b, update.Message.Chat.ID, userID, "Could not read session usage. The local server may be restarting; try again in a moment.")
+		return
+	}
+	a.sendReply(ctx, b, update.Message.Chat.ID, userID, formatUsage(u))
 }
 
 // formatUsage renders one /usage reply from server counters only. Pure
@@ -194,7 +206,7 @@ func commas(n int64) string {
 }
 
 func (a *app) ping(ctx context.Context, b *bot.Bot, update *models.Update) {
-	a.sendReply(ctx, b, update.Message.Chat.ID, "pong")
+	a.sendReply(ctx, b, update.Message.Chat.ID, update.Message.From.ID, "pong")
 }
 
 // unknownCommandReply answers a slash command the bot does not know.
@@ -249,29 +261,41 @@ func memoryTarget(arg string) (file, rest string) {
 
 func (a *app) remember(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
-	arg := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/remember"))
-	file, rest := memoryTarget(arg)
-	if err := Remember(a.agent.directory, file, rest); err != nil {
-		a.sendReply(ctx, b, chatID, "Could not remember that: "+err.Error())
+	userID := update.Message.From.ID
+	sess, err := a.sessionFor(userID)
+	if err != nil {
+		a.sendReply(ctx, b, chatID, userID, "Could not open your workspace; try again in a moment.")
 		return
 	}
-	a.sendReply(ctx, b, chatID, "Remembered in "+file+".")
+	arg := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/remember"))
+	file, rest := memoryTarget(arg)
+	if err := Remember(sess.agent.directory, file, rest); err != nil {
+		a.sendReply(ctx, b, chatID, userID, "Could not remember that: "+err.Error())
+		return
+	}
+	a.sendReply(ctx, b, chatID, userID, "Remembered in "+file+".")
 }
 
 func (a *app) forget(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
+	userID := update.Message.From.ID
+	sess, err := a.sessionFor(userID)
+	if err != nil {
+		a.sendReply(ctx, b, chatID, userID, "Could not open your workspace; try again in a moment.")
+		return
+	}
 	arg := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/forget"))
 	file, rest := memoryTarget(arg)
-	removed, err := Forget(a.agent.directory, file, rest)
+	removed, err := Forget(sess.agent.directory, file, rest)
 	if err != nil {
-		a.sendReply(ctx, b, chatID, "Could not forget that: "+err.Error())
+		a.sendReply(ctx, b, chatID, userID, "Could not forget that: "+err.Error())
 		return
 	}
 	if removed == 0 {
-		a.sendReply(ctx, b, chatID, "No lines in "+file+" matched.")
+		a.sendReply(ctx, b, chatID, userID, "No lines in "+file+" matched.")
 		return
 	}
-	a.sendReply(ctx, b, chatID, "Forgot the matching lines in "+file+".")
+	a.sendReply(ctx, b, chatID, userID, "Forgot the matching lines in "+file+".")
 }
 
 // start is an alias of /new: it delegates to fresh so both commands
@@ -286,13 +310,19 @@ func (a *app) help(ctx context.Context, b *bot.Bot, update *models.Update) {
 
 func (a *app) fresh(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
-	stop := a.keepTyping(ctx, b, chatID)
-	err := a.agent.Reset(ctx)
-	stop()
+	userID := update.Message.From.ID
+	sess, err := a.sessionFor(userID)
 	if err != nil {
-		a.sendReply(ctx, b, chatID, "Could not start a fresh session. The local server may be restarting; try again in a moment.")
+		a.sendReply(ctx, b, chatID, userID, "Could not open your workspace; try again in a moment.")
 		return
 	}
-	a.history.reset()
+	stop := a.keepTyping(ctx, b, chatID)
+	err = sess.agent.Reset(ctx)
+	stop()
+	if err != nil {
+		a.sendReply(ctx, b, chatID, userID, "Could not start a fresh session. The local server may be restarting; try again in a moment.")
+		return
+	}
+	sess.history.reset()
 	a.sendReplySilent(ctx, b, chatID, "Fresh session started.")
 }
