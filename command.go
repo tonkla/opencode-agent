@@ -55,12 +55,29 @@ func helpText() string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+// legacyScopes lists the menu scopes the old Hermes gateway used for
+// its ~60 slash commands. Scoped commands shadow the default menu, so
+// publishCommands clears them on every startup: with no scoped commands
+// left, every chat falls back to menuCommands.
+func legacyScopes() []models.BotCommandScope {
+	return []models.BotCommandScope{
+		&models.BotCommandScopeAllPrivateChats{},
+		&models.BotCommandScopeAllGroupChats{},
+		&models.BotCommandScopeAllChatAdministrators{},
+	}
+}
+
 // publishCommands exposes menuCommands in the Telegram menu. A failed
 // publish only reaches the process log: the menu is cosmetic and must
 // never keep the bot from starting.
 func (a *app) publishCommands(ctx context.Context, b *bot.Bot) {
 	if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: menuCommands()}); err != nil {
 		log.Printf("telegram menu: %v", err)
+	}
+	for _, scope := range legacyScopes() {
+		if _, err := b.DeleteMyCommands(ctx, &bot.DeleteMyCommandsParams{Scope: scope}); err != nil {
+			log.Printf("telegram menu scope %T: %v", scope, err)
+		}
 	}
 }
 

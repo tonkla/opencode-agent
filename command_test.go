@@ -61,8 +61,17 @@ func TestMenuCommands(t *testing.T) {
 
 func TestPublishCommands(t *testing.T) {
 	var path, body string
+	var deletes []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "deleteMyCommands") {
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Errorf("bad deleteMyCommands form: %v", err)
+			}
+			deletes = append(deletes, r.FormValue("scope"))
+			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "setMyCommands") {
 			path = r.URL.Path
 			if err := r.ParseMultipartForm(1 << 20); err != nil {
@@ -95,6 +104,21 @@ func TestPublishCommands(t *testing.T) {
 	for _, name := range []string{"start", "ping", "new", "model", "usage", "remember", "forget", "help"} {
 		if !strings.Contains(body, `"command":"`+name+`"`) {
 			t.Errorf("menu payload misses %q: %s", name, body)
+		}
+	}
+	// The old Hermes gateway left ~60 commands on the chat scopes, which
+	// shadow the default menu. Publish must clear those scopes so every
+	// chat falls back to the menu above.
+	for _, want := range []string{"all_private_chats", "all_group_chats"} {
+		found := false
+		for _, d := range deletes {
+			if strings.Contains(d, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("publish must clear the %s scope, got %v", want, deletes)
 		}
 	}
 }
