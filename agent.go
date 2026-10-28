@@ -282,8 +282,41 @@ func turnOver(fresh []sessionMessage) bool {
 	return false
 }
 
-func (a *Agent) waitForAnswer(ctx context.Context, id string, since int64) (string, error) {
+// ProgressFunc receives growing partial reply text while the turn runs.
+// It fires only when the newest assistant text changes, so callers can
+// forward each value to a streaming preview. A nil ProgressFunc disables
+// progress reports without changing the wait.
+type ProgressFunc func(partial string)
+
+// latestPartial returns the newest assistant text whether or not its turn
+// completed, so a slow turn can stream something before the final answer
+// exists. Pure over fetched messages so tests pin it without a server.
+func latestPartial(messages []sessionMessage) (string, bool) {
+	var best *sessionMessage
+	var bestText string
+	for i := range messages {
+		m := &messages[i]
+		if m.Type != "assistant" {
+			continue
+		}
+		if best != nil && m.Time.Created <= best.Time.Created {
+			continue
+		}
+		text, ok := messageText(m)
+		if !ok {
+			continue
+		}
+		best, bestText = m, text
+	}
+	if best == nil {
+		return "", false
+	}
+	return bestText, true
+}
+
+func (a *Agent) waitForAnswer(ctx context.Context, id string, since int64, onProgress ProgressFunc) (string, error) {
 	deadline := time.Now().Add(a.timeout)
+	var last string
 	for {
 		status, raw, err := a.call(ctx, http.MethodGet, "/session/"+url.PathEscape(id)+"/message", nil)
 		if err == nil && status == http.StatusOK {
@@ -301,6 +334,12 @@ func (a *Agent) waitForAnswer(ctx context.Context, id string, since int64) (stri
 				}
 				if answer, ok := extractAnswer(assistants); ok {
 					return answer, nil
+				}
+				if onProgress != nil {
+					if partial, ok := latestPartial(assistants); ok && partial != last {
+						last = partial
+						onProgress(partial)
+					}
 				}
 				if turnOver(fresh) {
 					return okReply, nil
@@ -320,6 +359,13 @@ func (a *Agent) waitForAnswer(ctx context.Context, id string, since int64) (stri
 
 // Ask sends one question to the live session and waits for its reply.
 func (a *Agent) Ask(ctx context.Context, question string) (string, error) {
+	return a.AskWithProgress(ctx, question, nil)
+}
+
+// AskWithProgress sends one question and reports growing partial text on
+// onProgress while the turn runs. The returned reply is still the whole
+// final answer.
+func (a *Agent) AskWithProgress(ctx context.Context, question string, onProgress ProgressFunc) (string, error) {
 	a.mu <- struct{}{}
 	defer func() { <-a.mu }()
 
@@ -358,7 +404,7 @@ func (a *Agent) Ask(ctx context.Context, question string) (string, error) {
 	} else if status != http.StatusOK {
 		return "", fmt.Errorf("prompt failed with %d", status)
 	}
-	return a.waitForAnswer(ctx, a.sessionID, since)
+	return a.waitForAnswer(ctx, a.sessionID, since, onProgress)
 }
 
 // Reset drops the live session and starts a blank one.

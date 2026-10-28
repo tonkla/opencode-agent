@@ -180,6 +180,23 @@ func (a *app) sendReplySilent(ctx context.Context, b *bot.Bot, chatID int64, tex
 	a.sendChunks(ctx, b, chatID, text)
 }
 
+// truncateDraft caps a streaming preview at the send boundary. Drafts
+// hold 4096 chars, so the 4000-rune reply chunk size keeps every
+// preview under the limit. Pure so tests pin it without Telegram.
+func truncateDraft(text string) string {
+	runes := []rune(text)
+	if len(runes) > maxReplyRunes {
+		return string(runes[:maxReplyRunes])
+	}
+	return text
+}
+
+// sendDraft streams one ephemeral preview. Failures stay silent: the
+// preview is cosmetic and the final sendMessage below must still run.
+func (a *app) sendDraft(ctx context.Context, b *bot.Bot, chatID int64, draftID, text string) {
+	_, _ = b.SendMessageDraft(ctx, &bot.SendMessageDraftParams{ChatID: chatID, DraftID: draftID, Text: text})
+}
+
 func (a *app) sendChunks(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	for _, chunk := range splitMessage(text) {
 		_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: chunk})
@@ -229,7 +246,24 @@ func (a *app) answer(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 	stop := a.keepTyping(ctx, b, chatID)
-	reply, err := sess.agent.Ask(ctx, update.Message.Text)
+	var onProgress ProgressFunc
+	if update.Message.Chat.Type == models.ChatTypePrivate {
+		draftID := strconv.FormatInt(time.Now().UnixNano(), 10)
+		if draftID == "0" {
+			draftID = "1"
+		}
+		a.sendDraft(ctx, b, chatID, draftID, "")
+		last := ""
+		onProgress = func(partial string) {
+			display := truncateDraft(scrubPaths(a.baseDir, userDir(a.baseDir, userID), partial)) + " ▌"
+			if display == last {
+				return
+			}
+			last = display
+			a.sendDraft(ctx, b, chatID, draftID, display)
+		}
+	}
+	reply, err := sess.agent.AskWithProgress(ctx, update.Message.Text, onProgress)
 	stop()
 	if err != nil {
 		a.sendReply(ctx, b, chatID, userID, "The agent request failed. The local server may be restarting; try again in a moment.")
