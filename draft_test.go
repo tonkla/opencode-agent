@@ -41,17 +41,32 @@ func TestLatestPartial(t *testing.T) {
 	}
 }
 
-func TestTruncateDraft(t *testing.T) {
-	if got := truncateDraft("hi"); got != "hi" {
+func TestSplitMarkdown(t *testing.T) {
+	if got := splitMarkdown("hi", telegramLimit); len(got) != 1 || got[0] != "hi" {
 		t.Errorf("short: %q", got)
 	}
-	long := strings.Repeat("x", maxReplyRunes+10)
-	if got := truncateDraft(long); len([]rune(got)) != maxReplyRunes {
-		t.Errorf("long: %d runes", len([]rune(got)))
+	long := strings.Repeat("x", maxReplyRunes*2+10)
+	if got := splitMarkdown(long, telegramLimit); len(got) != 3 {
+		t.Errorf("long: %d chunks", len(got))
 	}
 	emoji := strings.Repeat("😀", maxReplyRunes+1)
-	if got := truncateDraft(emoji); len([]rune(got)) != maxReplyRunes {
-		t.Error("multibyte truncation broke runes")
+	got := splitMarkdown(emoji, telegramLimit)
+	if len(got) != 2 || len([]rune(strings.Join(got, ""))) != maxReplyRunes+1 {
+		t.Error("multibyte split broke runes")
+	}
+}
+
+// TestSplitMarkdownBound proves converted chunks fit the Telegram cap
+// even when markup expands the source.
+func TestSplitMarkdownBound(t *testing.T) {
+	src := strings.Repeat("**x** ", 2000)
+	for _, p := range splitMarkdown(src, telegramLimit) {
+		if n := len([]rune(telegramHTML(p))); n > telegramLimit {
+			t.Fatalf("chunk of %d runes over the limit", n)
+		}
+	}
+	if got := splitMarkdown(src, telegramLimit); len(got) < 2 {
+		t.Errorf("marked-up long text stayed one chunk")
 	}
 }
 
@@ -107,16 +122,17 @@ func TestWaitForAnswerStreamsProgress(t *testing.T) {
 	}
 }
 
-// TestSendDraftHitsDraftEndpoint proves the preview reaches Telegram as a
-// sendMessageDraft call carrying the draft id and text.
+// TestSendDraftHitsDraftEndpoint proves the preview reaches Telegram as
+// HTML carrying the draft id and converted text.
 func TestSendDraftHitsDraftEndpoint(t *testing.T) {
-	var gotID, gotText atomic.Value
+	var gotID, gotText, gotMode atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "sendMessageDraft") {
 			_ = r.ParseMultipartForm(1 << 20)
 			gotID.Store(r.FormValue("draft_id"))
 			gotText.Store(r.FormValue("text"))
+			gotMode.Store(r.FormValue("parse_mode"))
 			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
 			return
 		}
@@ -127,8 +143,8 @@ func TestSendDraftHitsDraftEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	(&app{}).sendDraft(context.Background(), b, 9, "42", "hi")
-	if gotID.Load() != "42" || gotText.Load() != "hi" {
-		t.Errorf("draft sent id=%v text=%v, want id=42 text=hi", gotID.Load(), gotText.Load())
+	(&app{}).sendDraft(context.Background(), b, 9, "42", "**hi**")
+	if gotID.Load() != "42" || gotText.Load() != "<b>hi</b>" || gotMode.Load() != "HTML" {
+		t.Errorf("draft sent id=%v text=%v mode=%v, want id=42 text=<b>hi</b> mode=HTML", gotID.Load(), gotText.Load(), gotMode.Load())
 	}
 }

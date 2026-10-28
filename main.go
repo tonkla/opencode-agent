@@ -20,19 +20,9 @@ import (
 
 const maxReplyRunes = 4000
 
-// splitMessage cuts long replies into Telegram-sized chunks.
-func splitMessage(text string) []string {
-	runes := []rune(text)
-	var out []string
-	for i := 0; i < len(runes); i += maxReplyRunes {
-		end := i + maxReplyRunes
-		if end > len(runes) {
-			end = len(runes)
-		}
-		out = append(out, string(runes[i:end]))
-	}
-	return out
-}
+// draftTextLimit caps a streaming preview below the Telegram cap, leaving
+// room for the cursor the progress callback appends.
+const draftTextLimit = telegramLimit - 16
 
 // userSession is one Telegram user's isolated state: its own OpenCode
 // session via its own Agent, its own history file, and its own workspace
@@ -180,26 +170,19 @@ func (a *app) sendReplySilent(ctx context.Context, b *bot.Bot, chatID int64, tex
 	a.sendChunks(ctx, b, chatID, text)
 }
 
-// truncateDraft caps a streaming preview at the send boundary. Drafts
-// hold 4096 chars, so the 4000-rune reply chunk size keeps every
-// preview under the limit. Pure so tests pin it without Telegram.
-func truncateDraft(text string) string {
-	runes := []rune(text)
-	if len(runes) > maxReplyRunes {
-		return string(runes[:maxReplyRunes])
-	}
-	return text
-}
-
-// sendDraft streams one ephemeral preview. Failures stay silent: the
-// preview is cosmetic and the final sendMessage below must still run.
+// sendDraft streams one ephemeral preview as Telegram HTML. Failures
+// stay silent: the preview is cosmetic and the final sendMessage below
+// must still run. Empty text shows the client's thinking placeholder.
 func (a *app) sendDraft(ctx context.Context, b *bot.Bot, chatID int64, draftID, text string) {
-	_, _ = b.SendMessageDraft(ctx, &bot.SendMessageDraftParams{ChatID: chatID, DraftID: draftID, Text: text})
+	_, _ = b.SendMessageDraft(ctx, &bot.SendMessageDraftParams{ChatID: chatID, DraftID: draftID, Text: telegramHTML(text), ParseMode: models.ParseModeHTML})
 }
 
 func (a *app) sendChunks(ctx context.Context, b *bot.Bot, chatID int64, text string) {
-	for _, chunk := range splitMessage(text) {
-		_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: chunk})
+	for _, piece := range splitMarkdown(text, telegramLimit) {
+		html := telegramHTML(piece)
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: html, ParseMode: models.ParseModeHTML}); err != nil && isUnparseable(err) {
+			_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: piece})
+		}
 	}
 }
 
@@ -249,13 +232,15 @@ func (a *app) answer(ctx context.Context, b *bot.Bot, update *models.Update) {
 	var onProgress ProgressFunc
 	if update.Message.Chat.Type == models.ChatTypePrivate {
 		draftID := strconv.FormatInt(time.Now().UnixNano(), 10)
-		if draftID == "0" {
-			draftID = "1"
-		}
 		a.sendDraft(ctx, b, chatID, draftID, "")
 		last := ""
 		onProgress = func(partial string) {
-			display := truncateDraft(scrubPaths(a.baseDir, userDir(a.baseDir, userID), partial)) + " ▌"
+			scrubbed := scrubPaths(a.baseDir, userDir(a.baseDir, userID), partial)
+			pieces := splitMarkdown(scrubbed, draftTextLimit)
+			if len(pieces) == 0 {
+				return
+			}
+			display := pieces[0] + " ▌"
 			if display == last {
 				return
 			}

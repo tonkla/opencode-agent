@@ -39,21 +39,6 @@ func TestExtractAnswer(t *testing.T) {
 	}
 }
 
-func TestSplitMessage(t *testing.T) {
-	if got := splitMessage("hi"); len(got) != 1 || got[0] != "hi" {
-		t.Errorf("short: %q", got)
-	}
-	long := strings.Repeat("x", maxReplyRunes*2+10)
-	if got := splitMessage(long); len(got) != 3 {
-		t.Errorf("long: %d chunks", len(got))
-	}
-	emoji := strings.Repeat("😀", maxReplyRunes+1)
-	got := splitMessage(emoji)
-	if len(got) != 2 || len([]rune(strings.Join(got, ""))) != maxReplyRunes+1 {
-		t.Error("multibyte split broke runes")
-	}
-}
-
 func TestCreateBodyPinsWorkspace(t *testing.T) {
 	a := NewAgent(AgentOptions{Directory: "/tmp/ws"})
 	loc, ok := a.createBody()["location"].(map[string]any)
