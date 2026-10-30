@@ -30,6 +30,10 @@ Memory lives entirely in `agent_workspace_dir/<user_id>` per user: `MEMORY.md` h
 
 Only Telegram user IDs in `telegram_allowed_user_ids` get answers. Everyone else is ignored. Each user works inside its own `agent_workspace_dir/<user_id>` folder with its own OpenCode session, memory files, and chat history.
 
+## Recall
+
+The agent knows two OpenCode project commands, seeded into every user workspace on first use. `/recall-memory` searches curated memory (`MEMORY.md`, `USER.md`, `SOUL.md`, `IDENTITY.md`) plus daily notes (`memory/*.md`). `/recall-history` searches session transcripts (`history/`). Both run one deterministic search: an identical query plus corpus always gives identical output. Matching lines need every query word, results sort newest path first, and output caps at 30 hits. The same search runs from a shell as `opencode-agent recall memory --limit 30 -- QUERY` (or `history` for transcripts) with the query as one single argument. Recall stays OpenCode-side by design and never appears in the Telegram menu.
+
 ## How it works
 
 `main.go` runs the Telegram bot with long polling. `serve.go` starts a private `opencode serve` child on a loopback port with a generated password, waits until it answers, and restarts it when it dies. `agent.go` holds one live OpenCode session per user and talks to that child over HTTP with basic auth. `config.go` reads `config.toml` once at startup and fails fast on bad values. Unknown keys are rejected so typos never silently become defaults.
