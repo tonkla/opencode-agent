@@ -11,8 +11,12 @@ import (
 )
 
 func TestSnapshotEmpty(t *testing.T) {
-	if got := Snapshot(t.TempDir()); got != "" {
-		t.Errorf("missing files must snapshot empty, got %q", got)
+	got := Snapshot(t.TempDir())
+	if !strings.Contains(got, "/recall-memory") || !strings.Contains(got, "/recall-history") {
+		t.Errorf("empty workspace must still carry both recall commands, got %q", got)
+	}
+	if strings.Contains(got, "MEMORY (durable facts)") {
+		t.Errorf("missing files must add no curated sections, got %q", got)
 	}
 }
 
@@ -34,13 +38,14 @@ func TestRememberAndSnapshot(t *testing.T) {
 
 func TestWithSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	if got := withSnapshot(dir, "hi"); got != "hi" {
-		t.Errorf("no memory must pass text through, got %q", got)
+	got := withSnapshot(dir, "hi")
+	if !strings.HasSuffix(got, "\n\n---\n\nhi") || !strings.Contains(got, "/recall-memory") {
+		t.Errorf("empty workspace must still prefix the recall commands, got %q", got)
 	}
 	if err := Remember(dir, memoryFile, "project uses chi router"); err != nil {
 		t.Fatal(err)
 	}
-	got := withSnapshot(dir, "hi")
+	got = withSnapshot(dir, "hi")
 	if !strings.HasSuffix(got, "\n\n---\n\nhi") || !strings.Contains(got, "project uses chi router") {
 		t.Errorf("snapshot must prefix the question, got %q", got)
 	}

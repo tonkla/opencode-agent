@@ -94,8 +94,8 @@ func truncateShort(s string, budget int) string {
 }
 
 // Snapshot renders the bootstrap block injected when a session is created.
-// It returns "" when every curated file is missing or empty, so sessions
-// without memory behave exactly as before.
+// The recall line rides along even when every curated file is missing, so
+// every fresh session prompt carries both commands.
 func Snapshot(dir string) string {
 	var b strings.Builder
 	for _, s := range snapshotSections {
@@ -107,13 +107,18 @@ func Snapshot(dir string) string {
 		fmt.Fprintf(&b, "%s [%d/%d chars]\n%s\n\n", s.title, runeLen(content), budgetFor(s.file), content)
 	}
 	if b.Len() == 0 {
-		return ""
+		return recallLine
 	}
 	b.WriteString("Maintain these files as you learn: durable facts go to MEMORY.md, preferences to USER.md, running notes to memory/YYYY-MM-DD.md.")
+	b.WriteString("\n" + recallLine)
 	return b.String()
 }
 
-// withSnapshot prefixes question with the memory snapshot when one exists.
+// recallLine names both recall commands in one snapshot line.
+const recallLine = "Recall: /recall-memory searches curated memory and daily notes; /recall-history searches session transcripts."
+
+// withSnapshot prefixes question with the snapshot block. The recall line
+// rides along even for empty workspaces, so the text is never bare.
 // Pure over dir so tests pin it without a server.
 func withSnapshot(dir, question string) string {
 	if snap := Snapshot(dir); snap != "" {

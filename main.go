@@ -71,6 +71,13 @@ func (a *app) sessionFor(userID int64) (*userSession, error) {
 	if err := ensureWorkspaceDir(dir); err != nil {
 		return nil, err
 	}
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		exe = "opencode-agent"
+	}
+	if err := SeedRecallCommands(dir, exe); err != nil {
+		log.Printf("user %d recall commands: %v", userID, err)
+	}
 	opts := AgentOptions{
 		BaseURL:   a.baseURL,
 		Username:  serveUsername,
@@ -284,6 +291,9 @@ func resolveWorkspaceDir(dir string) (string, error) {
 }
 
 func run(ctx context.Context) error {
+	if len(os.Args) > 1 && os.Args[1] == "recall" {
+		return runRecall(os.Args[2:], os.Stdout)
+	}
 	configPath := flag.String("config", "config.toml", "path to config.toml")
 	flag.Parse()
 	cfg, err := LoadConfig(*configPath)

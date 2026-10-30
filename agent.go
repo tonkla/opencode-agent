@@ -379,9 +379,9 @@ func (a *Agent) AskWithProgress(ctx context.Context, question string, onProgress
 		fresh = true
 	}
 	// A fresh session gets the memory snapshot ahead of the question. This
-	// is the bootstrap injection: curated facts enter context once, and
-	// withSnapshot passes text through untouched when no memory files
-	// exist, so sessions without memory behave exactly as before.
+	// is the bootstrap injection: curated facts enter context once, and the
+	// recall line rides along even for empty workspaces, so every session
+	// learns both recall commands.
 	text := question
 	if fresh || a.bootstrap {
 		text = withSnapshot(a.directory, question)
