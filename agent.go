@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -357,6 +359,85 @@ func (a *Agent) waitForAnswer(ctx context.Context, id string, since int64, onPro
 	}
 }
 
+// sseEnvelope is one decoded `data:` frame from GET /api/event. Only the
+// fields progress needs are decoded; everything else is ignored.
+type sseEnvelope struct {
+	Type string `json:"type"`
+	Data struct {
+		SessionID string `json:"sessionID"`
+		Delta     string `json:"delta"`
+	} `json:"data"`
+}
+
+// streamDeltas follows GET /api/event while the turn runs and reports the
+// growing assistant text on onProgress. The message list only gains the
+// finished reply, so polling it can never stream: live text arrives solely
+// as session.text.delta events on this SSE bus. Deltas for other sessions
+// sharing the server are skipped by sessionID. It returns when ctx ends or
+// the stream breaks; a broken stream only loses the ephemeral preview, the
+// final answer still arrives through the message poll.
+func (a *Agent) streamDeltas(ctx context.Context, sessionID string, onProgress ProgressFunc) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL+"/api/event", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", a.auth)
+	// The polling client times out the whole response body, which would
+	// kill a long-lived stream. Streams get a client without a timeout
+	// and end when ctx is cancelled after the turn.
+	res, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		return
+	}
+	var acc strings.Builder
+	scanner := bufio.NewReader(res.Body)
+	var frame strings.Builder
+	flush := func() {
+		defer frame.Reset()
+		payload := strings.TrimSpace(frame.String())
+		if payload == "" {
+			return
+		}
+		var ev sseEnvelope
+		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+			return
+		}
+		if ev.Type != "session.text.delta" || ev.Data.SessionID != sessionID || ev.Data.Delta == "" {
+			return
+		}
+		acc.WriteString(ev.Data.Delta)
+		onProgress(acc.String())
+	}
+	for {
+		line, err := scanner.ReadString('\n')
+		if err != nil {
+			// A clean server-side close ends in EOF; only unexpected
+			// mid-turn failures reach the log.
+			if ctx.Err() == nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+				log.Printf("event stream: %v", err)
+			}
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if strings.HasPrefix(line, ":") {
+			continue // heartbeat comment
+		}
+		if text, ok := strings.CutPrefix(line, "data:"); ok {
+			frame.WriteString(strings.TrimSuffix(text, "\n"))
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			flush()
+		}
+	}
+}
+
 // Ask sends one question to the live session and waits for its reply.
 func (a *Agent) Ask(ctx context.Context, question string) (string, error) {
 	return a.AskWithProgress(ctx, question, nil)
@@ -403,6 +484,13 @@ func (a *Agent) AskWithProgress(ctx context.Context, question string, onProgress
 		}
 	} else if status != http.StatusOK {
 		return "", fmt.Errorf("prompt failed with %d", status)
+	}
+	// Live text rides the SSE bus, not the message list. Stream it while
+	// the completion poll below runs; cancelling stops the subscription.
+	if onProgress != nil {
+		streamCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		go a.streamDeltas(streamCtx, a.sessionID, onProgress)
 	}
 	return a.waitForAnswer(ctx, a.sessionID, since, onProgress)
 }
