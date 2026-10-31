@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"unicode"
 
 	"github.com/go-telegram/bot"
 )
@@ -74,6 +75,47 @@ func TestTelegramHTMLHistoryReply(t *testing.T) {
 	if strings.Contains(got, "**") {
 		t.Errorf("raw markers leaked:\n%s", got)
 	}
+}
+
+// TestSplitMarkdownKeepsWordsWhole reproduces a Telegram render where a
+// long reply was cut mid-word ("aftertho" / "ught"). No piece boundary
+// may land inside a word when the text has whitespace to break at.
+func TestSplitMarkdownKeepsWordsWhole(t *testing.T) {
+	src := "3. Reading state is first-class, not an afterthought at all here"
+	split := 0
+	for limit := 15; limit <= 70; limit++ {
+		pieces := splitMarkdown(src, limit)
+		if len(pieces) < 2 {
+			continue
+		}
+		split++
+		if joined := strings.Join(pieces, ""); joined != src {
+			t.Errorf("limit %d: split lost content: got %q want %q", limit, joined, src)
+		}
+		for _, p := range pieces {
+			if html := telegramHTML(p); len([]rune(html)) > limit {
+				t.Errorf("limit %d: piece exceeds limit: %q", limit, p)
+			}
+		}
+		for i := 0; i+1 < len(pieces); i++ {
+			last := []rune(pieces[i])
+			next := []rune(pieces[i+1])
+			if len(last) == 0 || len(next) == 0 {
+				continue
+			}
+			if isWordRune(last[len(last)-1]) && isWordRune(next[0]) {
+				t.Errorf("limit %d: piece %d breaks a word: %q | %q", limit, i, pieces[i], pieces[i+1])
+			}
+		}
+	}
+	if split == 0 {
+		t.Fatal("expected splits at some limit, got none")
+	}
+}
+
+// isWordRune reports a rune that continues a word across a split.
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
 func TestIsUnparseable(t *testing.T) {

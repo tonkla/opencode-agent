@@ -343,8 +343,9 @@ func parseBullet(line string) (string, bool) {
 }
 
 // splitMarkdown cuts src so every piece converts to at most limit runes
-// of HTML. Pieces stay valid on their own: an unclosed fence closes at
-// the piece end.
+// of HTML. Cuts land just after a newline, space, or tab, so a piece
+// never ends mid-word. Pieces stay valid on their own: an unclosed
+// fence closes at the piece end.
 func splitMarkdown(src string, limit int) []string {
 	var out []string
 	rest := []rune(src)
@@ -355,8 +356,6 @@ func splitMarkdown(src string, limit int) []string {
 		}
 		for {
 			if html := telegramHTML(string(rest[:n])); len([]rune(html)) <= limit || n <= 1 {
-				out = append(out, string(rest[:n]))
-				rest = rest[n:]
 				break
 			} else {
 				n = n * limit / len([]rune(html))
@@ -365,8 +364,27 @@ func splitMarkdown(src string, limit int) []string {
 				}
 			}
 		}
+		n = splitAtBoundary(rest, n)
+		out = append(out, string(rest[:n]))
+		rest = rest[n:]
 	}
 	return out
+}
+
+// splitAtBoundary pulls n back to just after the last newline, space, or
+// tab inside rest[:n], so a chunk never ends mid-word. It returns n
+// unchanged when the cut already lands on whitespace or no whitespace
+// fits, e.g. one very long token with no breaks.
+func splitAtBoundary(rest []rune, n int) int {
+	if n >= len(rest) || n <= 1 {
+		return n
+	}
+	for i := n - 1; i > 0; i-- {
+		if rest[i] == '\n' || rest[i] == ' ' || rest[i] == '\t' {
+			return i + 1
+		}
+	}
+	return n
 }
 
 // isUnparseable reports a Telegram entity error: the HTML was rejected,
