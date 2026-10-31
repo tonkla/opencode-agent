@@ -161,6 +161,42 @@ func TestHelpSkipsHistory(t *testing.T) {
 	}
 }
 
+func TestSlashCommandsSkipHistory(t *testing.T) {
+	for _, text := range []string{
+		"/ping", "/ping@agentbot", "/model", "/model list", "/usage",
+		"/remember x", "/forget x", "/new", "/start", "/help",
+		"/bogus", "/bogus args",
+	} {
+		if !skipsHistory(text) {
+			t.Errorf("skipsHistory(%q) = false, want true", text)
+		}
+	}
+	for _, text := range []string{"hello", "talk about /ping", "/", "/ ", "", " /ping"} {
+		if skipsHistory(text) {
+			t.Errorf("skipsHistory(%q) = true, want false", text)
+		}
+	}
+}
+
+func TestSlashRoundTripsSkipHistory(t *testing.T) {
+	var hits atomic.Int64
+	b := testBot(t, &hits)
+	clock, _ := testClock(time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC))
+	a := testAppWithClock(t, clock, 7)
+	a.requireUser(a.ping)(context.Background(), b, &models.Update{Message: &models.Message{
+		Text: "/ping", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
+	}})
+	a.requireUser(a.answer)(context.Background(), b, &models.Update{Message: &models.Message{
+		Text: "/bogus", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7},
+	}})
+	if hits.Load() != 2 {
+		t.Fatalf("slash replies must still send, %d sends", hits.Load())
+	}
+	if _, err := os.Stat(filepath.Join(userHistoryBase(a, 7), "history")); !os.IsNotExist(err) {
+		t.Error("slash round trips must leave no history behind")
+	}
+}
+
 func TestIsUnknownCommand(t *testing.T) {
 	for text, want := range map[string]bool{
 		"/bogus": true, "/bogus args": true, "/bogus@agentbot": true,

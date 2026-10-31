@@ -117,11 +117,12 @@ func (a *app) requireUser(next bot.HandlerFunc) bot.HandlerFunc {
 	}
 }
 
-// skipsHistory reports a /new, /start, or /help invocation, with an
-// optional @bot suffix. All three round trips stay out of history:
-// session mechanics, not conversation.
+// skipsHistory reports any slash command invocation: known or unknown,
+// with an optional @bot suffix and arguments. Every slash round trip
+// stays out of history: session mechanics, not conversation.
 func skipsHistory(text string) bool {
-	return isNewCommand(text) || isStartCommand(text) || isHelpCommand(text)
+	_, ok := commandName(text)
+	return ok
 }
 
 // isNewCommand reports a /new invocation, with an optional @bot suffix.
@@ -170,9 +171,9 @@ func (a *app) sendReply(ctx context.Context, b *bot.Bot, chatID, userID int64, t
 	a.sendChunks(ctx, b, chatID, text)
 }
 
-// sendReplySilent delivers one reply without persisting it, for session
-// mechanics like the /new acknowledgement, the /start welcome, and the
-// /help listing that are not conversation.
+// sendReplySilent delivers one reply without persisting it, for every
+// slash command round trip. Slash commands are session mechanics, not
+// conversation, so neither the invocation nor its reply reaches history.
 func (a *app) sendReplySilent(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	a.sendChunks(ctx, b, chatID, text)
 }
@@ -227,7 +228,7 @@ func (a *app) answer(ctx context.Context, b *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
 	userID := update.Message.From.ID
 	if isUnknownCommand(update.Message.Text) {
-		a.sendReply(ctx, b, chatID, userID, unknownCommandReply)
+		a.sendReplySilent(ctx, b, chatID, unknownCommandReply)
 		return
 	}
 	sess, err := a.sessionFor(userID)
