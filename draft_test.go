@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 func TestLatestPartial(t *testing.T) {
@@ -195,29 +199,133 @@ func TestAskWithProgressStreamsDeltas(t *testing.T) {
 	}
 }
 
-// TestSendDraftHitsDraftEndpoint proves the preview reaches Telegram as
-// HTML carrying the draft id and converted text.
-func TestSendDraftHitsDraftEndpoint(t *testing.T) {
-	var gotID, gotText, gotMode atomic.Value
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// TestPreviewGateCoalesces pins the throttle: the first text shows, a
+// repeat or a too-soon change does not, and the change shows once the
+// interval passes.
+func TestPreviewGateCoalesces(t *testing.T) {
+	now := time.Now()
+	g := &previewGate{interval: time.Second, clock: func() time.Time { return now }}
+	if !g.allow("a") {
+		t.Error("first update must show")
+	}
+	if g.allow("a") {
+		t.Error("repeat must not show")
+	}
+	if g.allow("b") {
+		t.Error("change inside the interval must not show")
+	}
+	now = now.Add(2 * time.Second)
+	if !g.allow("b") {
+		t.Error("change after the interval must show")
+	}
+}
+
+// TestAnswerStreamsViaEdits drives a private-chat turn end to end: a "…"
+// placeholder goes out, SSE deltas become throttled edits carrying the
+// growing preview, and the placeholder becomes the final reply. No draft
+// call may fire, and history keeps the whole reply.
+func TestAnswerStreamsViaEdits(t *testing.T) {
+	oldInterval := previewInterval
+	previewInterval = 0
+	defer func() { previewInterval = oldInterval }()
+	future := time.Now().UnixMilli() + 60000
+	completed := future + 1
+	var polls atomic.Int64
+	var mu sync.Mutex
+	var sends, edits []string
+	var drafts atomic.Int64
+	botSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if strings.HasSuffix(r.URL.Path, "sendMessageDraft") {
-			_ = r.ParseMultipartForm(1 << 20)
-			gotID.Store(r.FormValue("draft_id"))
-			gotText.Store(r.FormValue("text"))
-			gotMode.Store(r.FormValue("parse_mode"))
+		_ = r.ParseMultipartForm(1 << 20)
+		p := r.URL.Path
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "sendMessageDraft"):
+			drafts.Add(1)
 			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
-			return
+		case strings.HasSuffix(p, "sendMessage"):
+			sends = append(sends, r.FormValue("text"))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":11,"chat":{"id":7,"type":"private"},"date":1,"text":"x"}}`))
+		case strings.HasSuffix(p, "editMessageText"):
+			edits = append(edits, r.FormValue("text"))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":11,"chat":{"id":7,"type":"private"},"date":1,"text":"x"}}`))
+		default:
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"t"}}`))
 		}
-		_, _ = w.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"t"}}`))
 	}))
-	defer srv.Close()
-	b, err := bot.New("test-token", bot.WithServerURL(srv.URL))
+	defer botSrv.Close()
+	b, err := bot.New("test-token", bot.WithServerURL(botSrv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
-	(&app{}).sendDraft(context.Background(), b, 9, "42", "**hi**")
-	if gotID.Load() != "42" || gotText.Load() != "<b>hi</b>" || gotMode.Load() != "HTML" {
-		t.Errorf("draft sent id=%v text=%v mode=%v, want id=42 text=<b>hi</b> mode=HTML", gotID.Load(), gotText.Load(), gotMode.Load())
+	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := r.URL.Path
+		switch {
+		case p == "/api/session" && r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"data":{"id":"s1"}}`))
+		case strings.HasSuffix(p, "/prompt"):
+			_, _ = w.Write([]byte(`{}`))
+		case p == "/api/event":
+			w.Header().Set("Content-Type", "text/event-stream")
+			for _, f := range []string{
+				`data: {"id":"e1","type":"session.text.delta","data":{"sessionID":"s1","assistantMessageID":"m","ordinal":0,"delta":"Hello "}}`,
+				`data: {"id":"e2","type":"session.text.delta","data":{"sessionID":"s1","assistantMessageID":"m","ordinal":0,"delta":"world"}}`,
+			} {
+				_, _ = w.Write([]byte(f + "\n\n"))
+				w.(http.Flusher).Flush()
+			}
+		case strings.HasSuffix(p, "/message"):
+			if polls.Add(1) < 2 {
+				_, _ = w.Write([]byte(`{"data":[]}`))
+				return
+			}
+			msg := map[string]any{
+				"type":    "assistant",
+				"time":    map[string]any{"created": future, "completed": completed},
+				"content": []any{map[string]any{"type": "text", "text": "Hello world"}},
+			}
+			raw, _ := json.Marshal(map[string]any{"data": []any{msg}})
+			_, _ = w.Write(raw)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer agentSrv.Close()
+	a := testApp(t, 7)
+	a.baseURL = agentSrv.URL
+	a.password = "p"
+	a.timeout = 30 * time.Second
+	update := &models.Update{Message: &models.Message{
+		Text: "hi", From: &models.User{ID: 7}, Chat: models.Chat{ID: 7, Type: models.ChatTypePrivate},
+	}}
+	a.answer(context.Background(), b, update)
+	if drafts.Load() != 0 {
+		t.Errorf("draft endpoint hit %d times, previews must use edits", drafts.Load())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sends) != 1 || sends[0] != "…" {
+		t.Errorf("sends = %q, want one placeholder", sends)
+	}
+	if len(edits) < 2 {
+		t.Fatalf("edits = %q, want previews plus final", edits)
+	}
+	for _, e := range edits[:len(edits)-1] {
+		if !strings.Contains(e, "▌") {
+			t.Errorf("preview edit %q misses the cursor", e)
+		}
+	}
+	if last := edits[len(edits)-1]; last != "Hello world" {
+		t.Errorf("final edit = %q, want the full reply", last)
+	}
+	sess, _ := a.sessionFor(7)
+	raw, err := os.ReadFile(filepath.Join(sess.history.baseDir, "history", sess.history.started.Format("20060102"), sess.history.started.Format("1504")+".md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "Hello world") {
+		t.Errorf("history misses the reply: %q", raw)
 	}
 }

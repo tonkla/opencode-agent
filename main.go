@@ -20,9 +20,9 @@ import (
 
 const maxReplyRunes = 4000
 
-// draftTextLimit caps a streaming preview below the Telegram cap, leaving
+// previewTextLimit caps a streaming preview below the Telegram cap, leaving
 // room for the cursor the progress callback appends.
-const draftTextLimit = telegramLimit - 16
+const previewTextLimit = telegramLimit - 16
 
 // userSession is one Telegram user's isolated state: its own OpenCode
 // session via its own Agent, its own history file, and its own workspace
@@ -178,19 +178,93 @@ func (a *app) sendReplySilent(ctx context.Context, b *bot.Bot, chatID int64, tex
 	a.sendChunks(ctx, b, chatID, text)
 }
 
-// sendDraft streams one ephemeral preview as Telegram HTML. Failures
-// stay silent: the preview is cosmetic and the final sendMessage below
-// must still run. Empty text shows the client's thinking placeholder.
-func (a *app) sendDraft(ctx context.Context, b *bot.Bot, chatID int64, draftID, text string) {
-	_, _ = b.SendMessageDraft(ctx, &bot.SendMessageDraftParams{ChatID: chatID, DraftID: draftID, Text: telegramHTML(text), ParseMode: models.ParseModeHTML})
+// previewInterval is the minimum gap between preview edits. Per-delta
+// edits trip Telegram throttling and flicker; this keeps the preview near
+// one edit per interval. A var so tests can shrink it.
+var previewInterval = 1500 * time.Millisecond
+
+// previewGate coalesces a stream of partial texts into display updates.
+// allow reports whether text may display now: only when it changed and the
+// interval since the last allowed update passed. The clock is a field so
+// tests pin it without sleeping.
+type previewGate struct {
+	interval time.Duration
+	clock    func() time.Time
+	last     time.Time
+	lastText string
+}
+
+func (g *previewGate) allow(text string) bool {
+	if text == g.lastText {
+		return false
+	}
+	now := g.clock()
+	if !g.last.IsZero() && now.Sub(g.last) < g.interval {
+		return false
+	}
+	g.last, g.lastText = now, text
+	return true
+}
+
+// sendPlaceholder posts the message a streamed preview edits in place. It
+// returns 0 when the send fails; callers then skip preview edits and fall
+// back to a plain reply.
+func (a *app) sendPlaceholder(ctx context.Context, b *bot.Bot, chatID int64) int64 {
+	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "…"})
+	if err != nil || msg == nil {
+		return 0
+	}
+	return int64(msg.ID)
+}
+
+// editPreview rewrites the placeholder with one rendered piece. Failures
+// stay silent: the preview is cosmetic and the final reply below must
+// still run.
+func (a *app) editPreview(ctx context.Context, b *bot.Bot, chatID, messageID int64, piece string) {
+	html := telegramHTML(piece)
+	params := &bot.EditMessageTextParams{ChatID: chatID, MessageID: int(messageID), Text: html, ParseMode: models.ParseModeHTML}
+	if _, err := b.EditMessageText(ctx, params); err != nil && isUnparseable(err) {
+		_, _ = b.EditMessageText(ctx, &bot.EditMessageTextParams{ChatID: chatID, MessageID: int(messageID), Text: piece})
+	}
+}
+
+// deleteMessage drops the placeholder when the turn fails before producing
+// a reply worth showing. Failures stay silent like every preview step.
+func (a *app) deleteMessage(ctx context.Context, b *bot.Bot, chatID, messageID int64) {
+	_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: int(messageID)})
+}
+
+// finishPreview turns the placeholder into the final reply: history keeps
+// the whole scrubbed text, the placeholder becomes its first chunk, and
+// any remaining chunks follow as new messages.
+func (a *app) finishPreview(ctx context.Context, b *bot.Bot, chatID, userID, previewID int64, reply string) {
+	text := scrubPaths(a.baseDir, userDir(a.baseDir, userID), reply)
+	if sess, err := a.sessionFor(userID); err == nil {
+		sess.history.appendAgent(text)
+	} else {
+		log.Printf("user %d history: %v", userID, err)
+	}
+	pieces := splitMarkdown(text, telegramLimit)
+	if len(pieces) == 0 {
+		a.deleteMessage(ctx, b, chatID, previewID)
+		return
+	}
+	a.editPreview(ctx, b, chatID, previewID, pieces[0])
+	for _, piece := range pieces[1:] {
+		a.sendOne(ctx, b, chatID, piece)
+	}
+}
+
+func (a *app) sendOne(ctx context.Context, b *bot.Bot, chatID int64, piece string) {
+	html := telegramHTML(piece)
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: html, ParseMode: models.ParseModeHTML}); err != nil && isUnparseable(err) {
+		_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: piece})
+	}
 }
 
 func (a *app) sendChunks(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	for _, piece := range splitMarkdown(text, telegramLimit) {
-		html := telegramHTML(piece)
-		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: html, ParseMode: models.ParseModeHTML}); err != nil && isUnparseable(err) {
-			_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: piece})
-		}
+		a.sendOne(ctx, b, chatID, piece)
 	}
 }
 
@@ -238,28 +312,36 @@ func (a *app) answer(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 	stop := a.keepTyping(ctx, b, chatID)
 	var onProgress ProgressFunc
+	var previewID int64
 	if update.Message.Chat.Type == models.ChatTypePrivate {
-		draftID := strconv.FormatInt(time.Now().UnixNano(), 10)
-		a.sendDraft(ctx, b, chatID, draftID, "")
-		last := ""
+		previewID = a.sendPlaceholder(ctx, b, chatID)
+	}
+	if previewID != 0 {
+		gate := &previewGate{interval: previewInterval, clock: time.Now}
 		onProgress = func(partial string) {
 			scrubbed := scrubPaths(a.baseDir, userDir(a.baseDir, userID), partial)
-			pieces := splitMarkdown(scrubbed, draftTextLimit)
+			pieces := splitMarkdown(scrubbed, previewTextLimit)
 			if len(pieces) == 0 {
 				return
 			}
 			display := pieces[0] + " ▌"
-			if display == last {
+			if !gate.allow(display) {
 				return
 			}
-			last = display
-			a.sendDraft(ctx, b, chatID, draftID, display)
+			a.editPreview(ctx, b, chatID, previewID, display)
 		}
 	}
 	reply, err := sess.agent.AskWithProgress(ctx, update.Message.Text, onProgress)
 	stop()
 	if err != nil {
+		if previewID != 0 {
+			a.deleteMessage(ctx, b, chatID, previewID)
+		}
 		a.sendReply(ctx, b, chatID, userID, "The agent request failed. The local server may be restarting; try again in a moment.")
+		return
+	}
+	if previewID != 0 {
+		a.finishPreview(ctx, b, chatID, userID, previewID, reply)
 		return
 	}
 	a.sendReply(ctx, b, chatID, userID, reply)
