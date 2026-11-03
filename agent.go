@@ -482,6 +482,7 @@ func (a *Agent) AskWithProgress(ctx context.Context, question string, onProgress
 		if status, err := a.prompt(ctx, a.sessionID, withSnapshot(a.directory, question)); err != nil || status != http.StatusOK {
 			return "", fmt.Errorf("prompt failed with %d", status)
 		}
+		a.bootstrap = false
 	} else if status != http.StatusOK {
 		return "", fmt.Errorf("prompt failed with %d", status)
 	}
